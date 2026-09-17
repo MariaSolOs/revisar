@@ -26,6 +26,11 @@ fn block(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .title(title)
+        .title_style(if focused {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        })
         .border_style(Style::default().fg(if focused { t::PINK } else { t::BORDER }))
         .style(t::base())
 }
@@ -465,6 +470,20 @@ mod tests {
     use super::*;
     use crate::diff::{FileDiff, Snapshot, parse_patch};
     use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn only_focused_panel_titles_are_bold() {
+        for focused in [false, true] {
+            let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
+            terminal
+                .draw(|frame| frame.render_widget(block("Title", focused), frame.area()))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(1, 0)].modifier.contains(Modifier::BOLD), focused);
+            assert!(!buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+            assert!(!buffer[(1, 1)].modifier.contains(Modifier::BOLD));
+        }
+    }
+
     #[test]
     fn help_fits_its_contents_instead_of_filling_large_terminals() {
         let expected_width = HELP.lines().map(UnicodeWidthStr::width).max().unwrap() as u16 + 2;
