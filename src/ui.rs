@@ -229,8 +229,16 @@ impl Ui {
                 .selection
                 .is_some_and(|a| (a.min(view.row)..=a.max(view.row)).contains(&row_index));
             let current = row_index == view.row;
-            let bg = if current || selected {
+            let has_comment = app
+                .comments
+                .iter()
+                .any(|c| app.comment_on_row(c, row_index));
+            let bg = if has_comment && (current || selected) {
+                t::COMMENT_SELECTED_BG
+            } else if current || selected {
                 t::SELECTION
+            } else if has_comment {
+                t::COMMENT_BG
             } else {
                 match row.kind {
                     Kind::Add => t::ADD_BG,
@@ -244,10 +252,6 @@ impl Ui {
                 Kind::Hunk => t::PURPLE,
                 _ => t::CONTEXT,
             };
-            let has_comment = app
-                .comments
-                .iter()
-                .any(|c| app.comment_on_row(c, row_index));
             let marker = if current {
                 ">"
             } else if selected {
@@ -489,6 +493,111 @@ mod tests {
     use super::*;
     use crate::diff::{FileDiff, Snapshot, parse_patch};
     use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn commented_lines_and_ranges_have_full_width_backgrounds() {
+        use crate::review::{Anchor, Comment};
+        let file = FileDiff {
+            path: "file.txt".into(),
+            status: 'M',
+            patch: vec![],
+            rows: parse_patch(
+                "@@ -10,4 +10,4 @@\n context\n-old one\n-old two\n+new one\n+new two\n tail\n",
+            )
+            .unwrap(),
+        };
+        let comment = |a, b| Comment {
+            anchor: Anchor::lines(&file, a, b).unwrap(),
+            body: "Review this".into(),
+        };
+        let old = comment(2, 3);
+        let new = comment(4, 5);
+        let context = comment(1, 1);
+        let file_comment = Comment {
+            anchor: Anchor::file(&file),
+            body: "File comment".into(),
+        };
+        let mut app = App::new(Snapshot {
+            root: "/repo".into(),
+            head: "abc".into(),
+            files: vec![file],
+        });
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(80, 14)).unwrap();
+        let area = Rect::new(0, 0, 80, 14);
+        let inner = block("", true).inner(area);
+        let assert_row = |terminal: &Terminal<TestBackend>, row: u16, bg| {
+            for x in inner.x..inner.right() {
+                assert_eq!(
+                    terminal.backend().buffer()[(x, inner.y + row)].bg,
+                    bg,
+                    "Wrong background at column {x}, diff row {row}"
+                );
+            }
+        };
+
+        app.comments.push(old);
+        terminal
+            .draw(|frame| ui.diff(frame, &mut app, area))
+            .unwrap();
+        assert_row(&terminal, 2, t::COMMENT_BG);
+        assert_row(&terminal, 3, t::COMMENT_BG);
+        // New-side lines with the same source numbers must not inherit it.
+        assert_row(&terminal, 4, t::ADD_BG);
+        assert_row(&terminal, 5, t::ADD_BG);
+        assert_row(&terminal, 1, t::BG);
+
+        app.comments.extend([new, context]);
+        terminal
+            .draw(|frame| ui.diff(frame, &mut app, area))
+            .unwrap();
+        for row in 1..=5 {
+            assert_row(&terminal, row, t::COMMENT_BG);
+        }
+        assert_row(&terminal, 6, t::BG);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(inner.x + 1, inner.y + 2)].symbol(), "*");
+        // Keep the +/- gutters and syntax foregrounds intact.
+        assert_eq!(buffer[(inner.x + 14, inner.y + 2)].fg, t::DEL);
+        assert_eq!(buffer[(inner.x + 14, inner.y + 4)].fg, t::ADD);
+        assert_eq!(buffer[(inner.x + 16, inner.y + 4)].fg, t::FG);
+
+        app.views[0].row = 4;
+        app.selection = Some(2);
+        terminal
+            .draw(|frame| ui.diff(frame, &mut app, area))
+            .unwrap();
+        for row in 2..=4 {
+            assert_row(&terminal, row, t::COMMENT_SELECTED_BG);
+        }
+        assert_row(&terminal, 5, t::COMMENT_BG);
+        assert_eq!(
+            terminal.backend().buffer()[(inner.x, inner.y + 4)].symbol(),
+            ">"
+        );
+
+        app.selection = None;
+        app.views[0].row = 6;
+        app.comments.clear();
+        terminal
+            .draw(|frame| ui.diff(frame, &mut app, area))
+            .unwrap();
+        for row in [2, 3] {
+            assert_row(&terminal, row, t::DEL_BG);
+        }
+        for row in [4, 5] {
+            assert_row(&terminal, row, t::ADD_BG);
+        }
+        assert_row(&terminal, 1, t::BG);
+        assert_row(&terminal, 6, t::SELECTION);
+
+        app.comments.push(file_comment);
+        terminal
+            .draw(|frame| ui.diff(frame, &mut app, area))
+            .unwrap();
+        assert_row(&terminal, 0, t::COMMENT_BG);
+        assert_row(&terminal, 1, t::BG);
+    }
+
     #[test]
     fn only_focused_panel_titles_are_bold() {
         for focused in [false, true] {
