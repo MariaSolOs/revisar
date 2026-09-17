@@ -98,22 +98,15 @@ impl Ui {
         match &mut app.mode {
             Mode::Comment(draft) => {
                 let title = format!(" Comment: {} ", draft.anchor.heading());
-                editor_popup(
-                    frame,
-                    &title,
-                    &draft.editor,
-                    "Enter/Ctrl-s: keep comment   Shift-Enter/Ctrl-j: newline   Esc: discard edit",
-                    75,
-                    65,
-                );
+                let area = comment_layout(frame.area(), &draft.editor);
+                editor_popup(frame, area, &title, &draft.editor, COMMENT_HINT);
             }
             Mode::Search(editor) => editor_popup(
                 frame,
+                centered(frame.area(), 75, 30),
                 " Search all diffs (case-insensitive) ",
                 editor,
                 "Enter: search   Esc: cancel",
-                75,
-                30,
             ),
             Mode::Confirm(c) => {
                 let prompt = match c {
@@ -442,20 +435,38 @@ fn confirmation_layout<'a>(area: Rect, title: &str, text: &'a str) -> (Rect, Par
     (rect, paragraph)
 }
 
-fn editor_popup(
-    frame: &mut Frame,
-    title: &str,
-    editor: &Editor,
-    hint: &str,
-    width: u16,
-    height: u16,
-) {
-    let area = centered(frame.area(), width, height);
+fn comment_layout(area: Rect, editor: &Editor) -> Rect {
+    // Keep the width steady while typing; grow only as wrapped content needs
+    // more rows. Longer comments scroll within a bounded editing area.
+    let width = 64.min(area.width.saturating_sub(2));
+    let inner_width = width.saturating_sub(2);
+    let (lines, _, _) = editor.layout(inner_width as usize);
+    let hint_height = Paragraph::new(COMMENT_HINT)
+        .wrap(Wrap { trim: false })
+        .line_count(inner_width);
+    let height = (lines.len().clamp(3, 10) + hint_height + 2)
+        .min(area.height.saturating_sub(2) as usize) as u16;
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
+}
+
+fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hint: &str) {
     frame.render_widget(Clear, area);
     let b = block(title.to_string(), true);
     let inner = b.inner(area);
     frame.render_widget(b, area);
-    let sections = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).split(inner);
+    let hint = Paragraph::new(hint)
+        .style(Style::default().fg(t::CONTEXT))
+        .wrap(Wrap { trim: false });
+    let hint_height = hint
+        .line_count(inner.width)
+        .min(inner.height.saturating_sub(1) as usize) as u16;
+    let sections =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(hint_height)]).split(inner);
     let (lines, x, y) = editor.layout(sections[0].width as usize);
     let top = y.saturating_sub(sections[0].height.saturating_sub(1) as usize);
     let visible: Vec<Line> = lines
@@ -465,15 +476,11 @@ fn editor_popup(
         .map(|s| Line::raw(s.clone()))
         .collect();
     frame.render_widget(Paragraph::new(visible), sections[0]);
-    frame.render_widget(
-        Paragraph::new(hint)
-            .style(Style::default().fg(t::CONTEXT))
-            .wrap(Wrap { trim: false }),
-        sections[1],
-    );
+    frame.render_widget(hint, sections[1]);
     frame.set_cursor_position((sections[0].x + x as u16, sections[0].y + (y - top) as u16));
 }
 
+const COMMENT_HINT: &str = "Enter/Ctrl-s: keep   Esc: discard\nShift-Enter/Ctrl-j: newline";
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
 const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n r                 Toggle file reviewed (in memory only)\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
@@ -582,6 +589,51 @@ mod tests {
                     text.contains("y/Enter: yes     n/Esc: no"),
                     "Confirmation choices clipped at {width}x{height}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn comment_dialog_starts_small_and_grows_with_its_content() {
+        for area in [Rect::new(0, 0, 120, 40), Rect::new(5, 3, 200, 80)] {
+            for text in ["", "A short comment"] {
+                let popup = comment_layout(area, &Editor::new(text));
+                assert_eq!((popup.width, popup.height), (64, 7));
+                assert_eq!(popup.x, area.x + (area.width - popup.width) / 2);
+                assert_eq!(popup.y, area.y + (area.height - popup.height) / 2);
+            }
+            let multiline = Editor::new("one\ntwo\nthree\nfour\nfive\nsix");
+            assert_eq!(comment_layout(area, &multiline).height, 10);
+            let wrapped = Editor::new(&"界".repeat(100));
+            assert_eq!(comment_layout(area, &wrapped).height, 8);
+            let long = Editor::new(&"line\n".repeat(30));
+            assert_eq!(comment_layout(area, &long).height, 14);
+        }
+    }
+
+    #[test]
+    fn compact_comment_dialog_keeps_cursor_and_hints_visible() {
+        let mut editor = Editor::new(&format!("{}\nLast line", "界 comment\n".repeat(30)));
+        for (width, height) in [(45, 12), (60, 20), (120, 40)] {
+            for cursor in [0, editor.chars.len() / 2, editor.chars.len()] {
+                editor.cursor = cursor;
+                let area = Rect::new(0, 0, width, height);
+                let popup = comment_layout(area, &editor);
+                assert!(popup.width <= width - 2 && popup.height <= height - 2);
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| editor_popup(frame, popup, " Comment ", &editor, COMMENT_HINT))
+                    .unwrap();
+                let cursor = terminal.get_cursor_position().unwrap();
+                // Borders and the two hint rows are outside the editing area.
+                assert!(cursor.x > popup.x && cursor.x < popup.right() - 1);
+                assert!(cursor.y > popup.y && cursor.y < popup.bottom() - 3);
+                let buffer = terminal.backend().buffer();
+                let text: String = (0..height)
+                    .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
+                    .collect();
+                assert!(text.contains("Enter/Ctrl-s: keep   Esc: discard"));
+                assert!(text.contains("Shift-Enter/Ctrl-j: newline"));
             }
         }
     }
