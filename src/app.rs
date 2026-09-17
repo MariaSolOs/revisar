@@ -10,6 +10,8 @@ pub struct View {
     pub row: usize,
     pub top: usize,
     pub left: usize,
+    // One-shot request, applied with the actual viewport height on the next draw.
+    pub center: bool,
 }
 
 pub struct Draft {
@@ -352,6 +354,11 @@ impl App {
             self.summary_scroll = self.summary_scroll.saturating_add_signed(amount);
         } else {
             self.move_by(amount);
+            if !self.files_focused
+                && let Some(view) = self.views.get_mut(self.file)
+            {
+                view.center = true;
+            }
         }
     }
 
@@ -392,6 +399,7 @@ impl App {
             self.change_file(f);
             self.views[f].row = r;
             self.views[f].left = 0;
+            self.views[f].center = true;
             self.summary = false;
             self.files_focused = false;
             self.message = format!("{} matching lines", self.matches.len());
@@ -501,6 +509,22 @@ mod tests {
         press(&mut a, 'y');
         assert!(a.comments.is_empty());
     }
+    #[test]
+    fn paging_other_panels_does_not_request_diff_centering() {
+        let mut a = app();
+        a.files_focused = true;
+        a.page(1);
+        assert!(!a.views[0].center);
+        assert_eq!(a.views[0].row, 0);
+
+        a.files_focused = false;
+        a.summary = true;
+        a.page(1);
+        assert_eq!(a.summary_scroll, 10);
+        assert!(!a.views[0].center);
+        assert_eq!(a.views[0].row, 0);
+    }
+
     #[test]
     fn search_wraps_and_empty_tree_is_safe() {
         let mut a = app();

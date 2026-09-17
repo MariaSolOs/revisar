@@ -216,6 +216,10 @@ impl Ui {
             .entry(app.file)
             .or_insert_with(|| self.syntax.highlight(file));
         let view = &mut app.views[app.file];
+        if std::mem::take(&mut view.center) {
+            // Like zz: allow blank space below EOF, but never scroll above BOF.
+            view.top = view.row.saturating_sub(inner.height as usize / 2);
+        }
         if view.row < view.top {
             view.top = view.row;
         }
@@ -471,7 +475,7 @@ fn editor_popup(
 }
 
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page down/up (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk in this file\n / then n/N        Search all diffs, next/previous match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n r                 Toggle file reviewed (in memory only)\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n r                 Toggle file reviewed (in memory only)\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
@@ -579,6 +583,136 @@ mod tests {
                     "Confirmation choices clipped at {width}x{height}"
                 );
             }
+        }
+    }
+
+    fn navigation_app() -> App {
+        let files = [("a.txt", [25, 30]), ("b.txt", [40, 80])]
+            .into_iter()
+            .map(|(path, matches)| {
+                let mut patch = String::from("@@ -0,0 +1,100 @@\n");
+                for line in 1..=100 {
+                    patch.push_str(&format!(
+                        "+{} {line}\n",
+                        if matches.contains(&line) {
+                            "needle"
+                        } else {
+                            "line"
+                        }
+                    ));
+                }
+                FileDiff {
+                    path: path.into(),
+                    status: 'A',
+                    rows: parse_patch(&patch).unwrap(),
+                    patch: patch.into_bytes(),
+                }
+            })
+            .collect();
+        App::new(Snapshot {
+            root: "/repo".into(),
+            head: "abc".into(),
+            files,
+        })
+    }
+
+    fn navigate(
+        app: &mut App,
+        code: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) {
+        app.event(crossterm::event::Event::Key(
+            crossterm::event::KeyEvent::new(code, modifiers),
+        ));
+    }
+
+    #[test]
+    fn paging_recenters_once_while_line_movement_keeps_the_viewport() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut app = navigation_app();
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 25)).unwrap();
+        app.views[0].row = 35;
+        app.views[0].top = 30;
+        app.views[0].left = 4;
+        app.selection = Some(35);
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        assert_eq!(app.height, 20);
+        for (key, modifiers, row) in [
+            (KeyCode::Char('d'), KeyModifiers::CONTROL, 45),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL, 35),
+            (KeyCode::PageDown, KeyModifiers::NONE, 55),
+            (KeyCode::PageUp, KeyModifiers::NONE, 35),
+        ] {
+            navigate(&mut app, key, modifiers);
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            assert_eq!(app.views[0].row, row);
+            assert_eq!(app.views[0].top, row - 10);
+            assert!(!app.views[0].center);
+            assert_eq!(app.views[0].left, 4);
+            assert_eq!(app.selection, Some(35));
+            // The marker is physically at the middle of the diff's inner area.
+            assert_eq!(terminal.backend().buffer()[(31, 12)].symbol(), ">");
+        }
+        for key in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Down,
+            KeyCode::Up,
+        ] {
+            navigate(&mut app, key, KeyModifiers::NONE);
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            assert_eq!(app.views[0].top, 25);
+        }
+    }
+
+    #[test]
+    fn centering_handles_file_boundaries_and_uses_the_new_size_after_resize() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut app = navigation_app();
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 25)).unwrap();
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        navigate(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        assert_eq!((app.views[0].row, app.views[0].top), (0, 0));
+        app.views[0].row = 95;
+        navigate(&mut app, KeyCode::Char('d'), KeyModifiers::CONTROL);
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        assert_eq!((app.views[0].row, app.views[0].top), (100, 90));
+
+        app.views[0].row = 35;
+        navigate(&mut app, KeyCode::Char('d'), KeyModifiers::CONTROL);
+        let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        assert_eq!(app.height, 30);
+        assert_eq!((app.views[0].row, app.views[0].top), (45, 30));
+    }
+
+    #[test]
+    fn search_centers_visible_matches_cross_file_jumps_and_wraparound() {
+        use crossterm::event::{Event, KeyCode, KeyModifiers};
+        let mut app = navigation_app();
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 25)).unwrap();
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        navigate(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.event(Event::Paste("needle".into()));
+        for (key, file, row) in [
+            (KeyCode::Enter, 0, 25),
+            (KeyCode::Char('n'), 0, 30),
+            (KeyCode::Char('n'), 1, 40),
+            (KeyCode::Char('N'), 0, 30),
+            (KeyCode::Char('N'), 0, 25),
+            (KeyCode::Char('N'), 1, 80),
+            (KeyCode::Char('n'), 0, 25),
+        ] {
+            navigate(&mut app, key, KeyModifiers::NONE);
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            assert_eq!(app.file, file);
+            assert_eq!(app.views[file].row, row);
+            assert_eq!(app.views[file].top, row - 10);
+            assert_eq!(terminal.backend().buffer()[(31, 12)].symbol(), ">");
         }
     }
 
