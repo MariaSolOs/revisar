@@ -28,11 +28,14 @@ tab opens. Write comments, then press **S** and confirm to send the whole review
 to the same Pi conversation and close the tab. **q** cancels; comments require
 confirmation before being discarded. Your existing `/tuicr` extension is untouched.
 
-The launcher uses your Ghostty `alt+shift+t` / `alt+shift+p` bindings. macOS needs
-Accessibility permission for the terminal running Pi. Linux uses Hyprland's
-`hyprctl` and `wl-copy`. As with the old integration, launching overwrites the
-clipboard with the wrapper command. The new tab's shell is replaced with `exec`,
-so no focus-dependent close-tab shortcut is needed.
+On macOS, the launcher uses Ghostty 1.3's native AppleScript API and needs
+Automation permission to control Ghostty. The wrapper runs as the new tab's
+command with `wait after command` disabled. Cleanup closes that tab by its
+stable ID if it is still open, never whichever tab happens to be focused. The
+clipboard is untouched. Linux uses Hyprland's `hyprctl`, `wl-copy`, and your
+`alt+shift+t` / `alt+shift+p` bindings to launch an `exec` wrapper; that path
+replaces the clipboard. The wrapper records revisar's real exit status for Pi,
+then exits successfully so cancellation is not treated as a terminal failure.
 
 ## Review flow
 
@@ -96,8 +99,9 @@ a private temporary directory for a wrapper, one-shot feedback, and an atomic
 exit marker; it removes that transport on completion, cancellation, error, or
 Pi shutdown/reload. It never uses tuicr's session store or changes HOME/XDG paths.
 Pi retains submitted feedback as ordinary conversation text, not as a revisar
-session. If Pi switches/reloads while a tab remains open, that tab's review is
-abandoned: close it and start a new one. Reviews time out after four hours.
+session. If Pi switches/reloads, the review is abandoned and its macOS tab is
+closed; on Linux, close any remaining review tab manually. Reviews time out
+after four hours.
 As with any process, a hard kill or machine crash can leave temporary files;
 there is no recovery/resume mechanism.
 
