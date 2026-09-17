@@ -8,20 +8,42 @@ sending actionable comments back to the agent. Inspired by
 
 Requires Rust, a C toolchain, Git, and a Unix terminal (macOS or Linux).
 
+From your revisar checkout, wherever it lives on this computer:
+
 ```sh
-cd /Volumes/git/revisar
 cargo build --release --locked
+node scripts/setup-pi.mjs
 ```
 
-The extension lives in your Pi config, not this checkout:
+The setup command installs a tiny, path-independent loader at
+`~/.pi/agent/extensions/revisar/index.ts`. Keep that loader in your normal synced
+Pi config. The implementation and tests stay here in `integrations/pi/`; they
+are never copied into your config.
 
-```text
-~/.pi/agent/extensions/revisar/index.ts
-```
+Each computer stores its own checkout location in
+`$XDG_STATE_HOME/revisar/checkout.json`, defaulting to
+`~/.local/state/revisar/checkout.json`. **Do not sync this registration file.**
+It contains only the checkout path, not review data. Setup also honors
+`PI_CODING_AGENT_DIR` for a non-default Pi config directory. Use the same
+`XDG_STATE_HOME` when running setup and Pi; relative XDG values are ignored.
 
-It points directly at this checkout's `target/release/revisar`. After rebuilding,
-the next review uses the new binary. If you move the checkout, update `REVISAR`
-in the extension.
+The loader imports directly from the registered checkout. The extension finds
+`target/release/revisar` relative to its own source, so a different checkout path
+on each computer needs no config edits. No npm package installation is involved.
+Node.js 22.18+ is needed for setup and integration tests.
+
+On a new computer or after moving the checkout, rerun the two commands above,
+then `/reload` in Pi. For ordinary code updates, rebuild the binary and `/reload`;
+setup is only needed again after a move or a change to the loader template.
+Only one checkout can be registered per local state directory; the last setup wins.
+
+Setup is safe to repeat and only replaces its own managed loader. When migrating
+from the old full extension in Pi config, first preserve any local changes and
+move that old extension directory outside Pi's auto-discovery directory. Setup
+refuses to overwrite an unmanaged extension rather than silently losing edits.
+Do not also add the implementation to Pi's `settings.json`: that would register
+`/revisar` twice. If no valid checkout is registered, `/revisar` explains how to
+set it up instead of breaking Pi startup.
 
 In Pi, run `/reload`, then `/revisar` after the agent has finished. A new Ghostty
 tab opens. Write comments, then press **S** and confirm to send the whole review
@@ -92,7 +114,7 @@ repositories are not traversed; tracked submodules show Git's short summary.
 
 There are no saved/resumable reviews, hosting integrations, comment categories,
 side-by-side mode, mouse controls, external-editor launching, theme settings,
-telemetry, installers, release binaries, or updater.
+telemetry, release installers, release binaries, or updater.
 
 Comments and reviewed markers exist only in the running TUI. The extension uses
 a private temporary directory for a wrapper, one-shot feedback, and an atomic
@@ -122,15 +144,23 @@ approval or starting an agent turn. `--help` and `--version` are the only CLI fl
 ## Validate
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets --locked -- -D warnings
-cargo test --all-targets --locked
-
-cd ~/.pi/agent/extensions
-tsgo -p tsconfig.json
-prettier --check revisar/index.ts revisar/index.test.mjs
-node --experimental-test-module-mocks --test revisar/index.test.mjs
+./scripts/check
 ```
+
+This runs Rust formatting, Clippy, all Rust tests, a release build, and the Pi
+integration checks together. It requires Python 3, Node.js 22.18+, `npm`, a globally
+installed Pi, `tsgo`, and `prettier`. No dependencies are downloaded by the Pi
+checks: they discover the installed Pi through `npm root -g` (or `PI_PACKAGE_DIR`)
+and generate machine-specific type paths only under `target/`.
+
+To run just the Pi checks after building the binary:
+
+```sh
+node scripts/check-pi.mjs
+```
+
+When changing the installed loader, also follow your Pi-config validation rules:
+`cd ~/.pi/agent/extensions && tsgo -p tsconfig.json`.
 
 Tests create disposable Git fixtures using libgit2 (a test-only dependency),
 exercise the read-only Git CLI backend, render with Ratatui's test backend, and
@@ -138,3 +168,6 @@ run the real binary under a Python 3 PTY. PTY checks cover Send, cancellation,
 stale snapshots, stdout isolation, and terminal restoration after SIGTERM.
 The extension's Node tests mock Ghostty automation but execute its generated
 shell wrapper and verify handoff, cancellation, cleanup, and shutdown behavior.
+Registration tests use fake homes and checkouts under `target/` and the installed
+Pi's real extension loader. They cover different paths, moved checkouts, `/reload`,
+missing/invalid registration, binary resolution, and safe setup reruns.

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Validate the binary and its Pi integration together from this checkout.
+set -eu
+cd -- "$(dirname -- "$0")/.."
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo build --release --locked
+node scripts/check-pi.mjs
