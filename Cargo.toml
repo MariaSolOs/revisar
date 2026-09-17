@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 crossterm = "0.29"
-ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.5", default-features = false, features = ["syntect-default-fancy"] }
 unicode-width = "0.2"

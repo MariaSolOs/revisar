@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 use std::collections::HashMap;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -122,13 +122,10 @@ impl Ui {
                     Confirmation::Discard => format!("Discard all {} comment(s) and close?\n\nNothing will be sent or saved.", app.comments.len()),
                     Confirmation::Delete(_) => "Delete this comment from the review?".into(),
                 };
-                popup(
-                    frame,
-                    " Confirm ",
-                    &format!("{prompt}\n\ny/Enter: yes     n/Esc: no"),
-                    70,
-                    55,
-                );
+                let text = format!("{prompt}\n\ny/Enter: yes     n/Esc: no");
+                let (area, paragraph) = confirmation_layout(frame.area(), " Confirm ", &text);
+                frame.render_widget(Clear, area);
+                frame.render_widget(paragraph, area);
             }
             Mode::Help(scroll) => {
                 let (area, lines) = help_layout(frame.area());
@@ -419,15 +416,26 @@ fn help_layout(area: Rect) -> (Rect, Vec<String>) {
     (rect, lines)
 }
 
-fn popup(frame: &mut Frame, title: &str, text: &str, width: u16, height: u16) {
-    let area = centered(frame.area(), width, height);
-    frame.render_widget(Clear, area);
-    frame.render_widget(
-        Paragraph::new(text)
-            .wrap(Wrap { trim: false })
-            .block(block(title.to_string(), true)),
-        area,
+fn confirmation_layout<'a>(area: Rect, title: &str, text: &'a str) -> (Rect, Paragraph<'a>) {
+    let content_width = text.lines().map(UnicodeWidthStr::width).max().unwrap_or(0);
+    // One cell of horizontal padding plus the border on each side. Cap long
+    // prompts at a readable width rather than stretching across the terminal.
+    let width = (content_width.max(title.width()) + 4)
+        .min(64)
+        .min(area.width.saturating_sub(2) as usize) as u16;
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    // Measure with the same word wrapper used for rendering. Allow the dialog
+    // to use the terminal's full height if needed to keep the choices visible.
+    let height =
+        (paragraph.line_count(width.saturating_sub(4)) + 2).min(area.height as usize) as u16;
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
     );
+    let paragraph = paragraph.block(block(title.to_string(), true).padding(Padding::horizontal(1)));
+    (rect, paragraph)
 }
 
 fn editor_popup(
@@ -523,6 +531,55 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         terminal.draw(|f| ui.draw(f, &mut app)).unwrap();
         assert!(matches!(app.mode, Mode::Help(0)));
+    }
+
+    #[test]
+    fn confirmation_dialogs_fit_their_text_with_minimal_padding() {
+        let text = "Delete this comment from the review?\n\ny/Enter: yes     n/Esc: no";
+        for area in [Rect::new(0, 0, 120, 40), Rect::new(5, 3, 200, 80)] {
+            let (popup, _) = confirmation_layout(area, " Confirm ", text);
+            assert_eq!(
+                popup.width,
+                text.lines().map(UnicodeWidthStr::width).max().unwrap() as u16 + 4
+            );
+            assert_eq!(popup.height, 5);
+            assert_eq!(popup.x, area.x + (area.width - popup.width) / 2);
+            assert_eq!(popup.y, area.y + (area.height - popup.height) / 2);
+        }
+        let text = "A longer confirmation message with enough words to wrap without making the dialog as wide as the terminal.\n\ny/Enter: yes     n/Esc: no";
+        let (popup, _) = confirmation_layout(Rect::new(0, 0, 200, 80), " Confirm ", text);
+        assert_eq!(popup.width, 64);
+        assert_eq!(popup.height, 6);
+    }
+
+    #[test]
+    fn every_confirmation_keeps_its_choices_visible_on_small_terminals() {
+        let mut app = App::new(Snapshot {
+            root: "/repo".into(),
+            head: "abc".into(),
+            files: vec![],
+        });
+        let mut ui = Ui::default();
+        for (width, height) in [(45, 12), (60, 20), (120, 40)] {
+            for confirmation in [
+                Confirmation::Send,
+                Confirmation::Stale,
+                Confirmation::Discard,
+                Confirmation::Delete(0),
+            ] {
+                app.mode = Mode::Confirm(confirmation);
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+                let buffer = terminal.backend().buffer();
+                let text: String = (0..height)
+                    .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
+                    .collect();
+                assert!(
+                    text.contains("y/Enter: yes     n/Esc: no"),
+                    "Confirmation choices clipped at {width}x{height}"
+                );
+            }
+        }
     }
 
     #[test]
