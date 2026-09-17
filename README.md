@@ -66,7 +66,7 @@ then exits successfully so cancellation is not treated as a terminal failure.
   is embedded from `assets/miss-dracula-syntax.tmTheme`; no runtime config files.
 - Line, range, file, and general comments. Comments include source coordinates,
   old/new side, base HEAD, and the selected code excerpt in the agent's feedback.
-- Diff search, hunk navigation, comment summary, and in-memory reviewed markers.
+- Diff search, hunk navigation, and comment summary.
 - Before Send, revisar checks the snapshot again. Changed files require a second
   confirmation and add a warning that the original line numbers may be stale.
 
@@ -85,7 +85,6 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | `C` / `a`           | File / general comment                          |
 | `s`                 | Comment summary; `Enter` jumps to the anchor    |
 | `i` / `d`           | Edit / delete selected comment                  |
-| `r`                 | Toggle file reviewed                            |
 | `S`                 | Send all comments and close                     |
 | `q`                 | Cancel without sending                          |
 | `?`                 | Help                                            |
@@ -120,7 +119,7 @@ There are no saved/resumable reviews, hosting integrations, comment categories,
 side-by-side mode, mouse controls, external-editor launching, theme settings,
 telemetry, release installers, release binaries, or updater.
 
-Comments and reviewed markers exist only in the running TUI. The extension uses
+Comments exist only in the running TUI. The extension uses
 a private temporary directory for a wrapper, one-shot feedback, and an atomic
 exit marker; it removes that transport on completion, cancellation, error, or
 Pi shutdown/reload. It never uses tuicr's session store or changes HOME/XDG paths.

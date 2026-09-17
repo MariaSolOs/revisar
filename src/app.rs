@@ -48,7 +48,6 @@ pub struct App {
     pub snapshot: Snapshot,
     pub file: usize,
     pub views: Vec<View>,
-    pub reviewed: Vec<bool>,
     pub comments: Vec<Comment>,
     pub mode: Mode,
     pub files_focused: bool,
@@ -69,7 +68,6 @@ impl App {
             snapshot,
             file: 0,
             views: vec![View::default(); count],
-            reviewed: vec![false; count],
             comments: vec![],
             mode: Mode::Normal,
             files_focused: false,
@@ -268,7 +266,6 @@ impl App {
             KeyCode::Char('n') => self.next_match(false),
             KeyCode::Char('N') => self.next_match(true),
             _ if self.snapshot.files.is_empty() => (),
-            KeyCode::Char('r') => self.reviewed[self.file] = !self.reviewed[self.file],
             KeyCode::Char('C') => self.draft(Anchor::file(&self.snapshot.files[self.file])),
             _ if self.summary || self.files_focused => (),
             KeyCode::Char('h') | KeyCode::Left => {

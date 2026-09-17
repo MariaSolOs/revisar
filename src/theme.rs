@@ -13,7 +13,6 @@ use syntect::{
 pub const BG: Color = Color::Rgb(0x0e, 0x14, 0x19);
 pub const FG: Color = Color::Rgb(0xf6, 0xf6, 0xf5);
 pub const MUTED: Color = Color::Rgb(0xa9, 0xab, 0xac);
-pub const DIM: Color = Color::Rgb(0x6d, 0x59, 0x78);
 pub const SELECTION: Color = Color::Rgb(0x3c, 0x41, 0x48);
 pub const COMMENT_BG: Color = Color::Rgb(0x34, 0x47, 0x4f);
 pub const COMMENT_SELECTED_BG: Color = Color::Rgb(0x48, 0x5e, 0x69);

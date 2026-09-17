@@ -55,9 +55,8 @@ impl Ui {
             Constraint::Length(2),
         ])
         .split(area);
-        let reviewed = app.reviewed.iter().filter(|r| **r).count();
         let header = format!(
-            " revisar  |  working tree  |  {reviewed}/{} reviewed  |  {} comments",
+            " revisar  |  working tree  |  {} files  |  {} comments",
             app.snapshot.files.len(),
             app.comments.len()
         );
@@ -110,7 +109,7 @@ impl Ui {
             ),
             Mode::Confirm(c) => {
                 let prompt = match c {
-                    Confirmation::Send => format!("Send {} comment(s) to the agent and close?\n\n{reviewed}/{} files marked reviewed. Nothing is saved for later.", app.comments.len(), app.snapshot.files.len()),
+                    Confirmation::Send => format!("Send {} comment(s) to the agent and close?\n\nNothing is saved for later.", app.comments.len()),
                     Confirmation::Stale => "The working tree changed since this review opened.\n\nSend comments with an explicit stale-snapshot warning? The agent will receive the original code excerpts and line anchors.".into(),
                     Confirmation::Discard => format!("Discard all {} comment(s) and close?\n\nNothing will be sent or saved.", app.comments.len()),
                     Confirmation::Delete(_) => "Delete this comment from the review?".into(),
@@ -144,8 +143,7 @@ impl Ui {
             .snapshot
             .files
             .iter()
-            .enumerate()
-            .map(|(i, f)| {
+            .map(|f| {
                 let color = match f.status {
                     'A' => t::GREEN,
                     'D' => t::RED,
@@ -157,10 +155,6 @@ impl Ui {
                     .filter(|c| c.anchor.path.as_deref() == Some(&f.path))
                     .count();
                 ListItem::new(Line::from(vec![
-                    Span::styled(
-                        if app.reviewed[i] { "[x] " } else { "[ ] " },
-                        Style::default().fg(if app.reviewed[i] { t::ADD } else { t::DIM }),
-                    ),
                     Span::styled(format!("{} ", f.status), Style::default().fg(color)),
                     Span::raw(display_text(&f.path)),
                     Span::styled(
@@ -486,7 +480,7 @@ fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hin
 
 const COMMENT_HINT: &str = "Enter/Ctrl-s: keep   Esc: discard\nShift-Enter/Ctrl-j: newline";
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n r                 Toggle file reviewed (in memory only)\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
@@ -745,6 +739,44 @@ mod tests {
                 assert!(text.contains("Shift-Enter/Ctrl-j: newline"));
             }
         }
+    }
+
+    #[test]
+    fn file_list_shows_changes_and_comments_without_review_tracking() {
+        use crate::review::{Anchor, Comment};
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut app = navigation_app();
+        app.comments.push(Comment {
+            anchor: Anchor::file(&app.snapshot.files[0]),
+            body: "Please fix".into(),
+        });
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let screen_text = |terminal: &Terminal<TestBackend>| -> String {
+            let buffer = terminal.backend().buffer();
+            (0..40)
+                .flat_map(|y| (0..120).map(move |x| buffer[(x, y)].symbol()))
+                .collect()
+        };
+        for files_focused in [false, true] {
+            app.files_focused = files_focused;
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            let text = screen_text(&terminal);
+            assert!(text.contains("2 files  |  1 comments"));
+            assert!(text.contains("A a.txt (1)"));
+            assert!(!text.contains("[ ]") && !text.contains("[x]"));
+            assert!(!text.contains("reviewed"));
+            let before = terminal.backend().buffer().clone();
+            navigate(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            assert_eq!(*terminal.backend().buffer(), before);
+        }
+        app.mode = Mode::Confirm(Confirmation::Send);
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        let text = screen_text(&terminal);
+        assert!(text.contains("Send 1 comment(s) to the agent and close?"));
+        assert!(!text.contains("reviewed"));
+        assert!(!HELP.contains("Toggle file reviewed"));
     }
 
     fn navigation_app() -> App {
