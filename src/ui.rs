@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::collections::HashMap;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Default)]
 pub struct Ui {
@@ -126,12 +126,11 @@ impl Ui {
                 );
             }
             Mode::Help(scroll) => {
-                let area = centered(frame.area(), 94, 94);
+                let (area, lines) = help_layout(frame.area());
                 frame.render_widget(Clear, area);
-                let b = block(" Help - j/k scroll, ?/Esc close ", true);
+                let b = block(HELP_TITLE, true);
                 let inner = b.inner(area);
                 frame.render_widget(b, area);
-                let (lines, _, _) = Editor::new(HELP).layout(inner.width as usize);
                 *scroll = (*scroll).min(lines.len().saturating_sub(inner.height as usize));
                 let visible: Vec<Line> = lines
                     .into_iter()
@@ -398,6 +397,23 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
+fn help_layout(area: Rect) -> (Rect, Vec<String>) {
+    // Fit the text plus its border, leaving a one-cell terminal margin.
+    // Measure height after wrapping so narrow terminals can still scroll.
+    let content_width = HELP.lines().map(UnicodeWidthStr::width).max().unwrap_or(0);
+    let width = (content_width.max(HELP_TITLE.width()) + 2)
+        .min(area.width.saturating_sub(2) as usize) as u16;
+    let (lines, _, _) = Editor::new(HELP).layout(width.saturating_sub(2) as usize);
+    let height = (lines.len() + 2).min(area.height.saturating_sub(2) as usize) as u16;
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    (rect, lines)
+}
+
 fn popup(frame: &mut Frame, title: &str, text: &str, width: u16, height: u16) {
     let area = centered(frame.area(), width, height);
     frame.render_widget(Clear, area);
@@ -441,13 +457,55 @@ fn editor_popup(
     frame.set_cursor_position((sections[0].x + x as u16, sections[0].y + (y - top) as u16));
 }
 
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page down/up (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk in this file\n / then n/N        Search all diffs, next/previous match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n r                 Toggle file reviewed (in memory only)\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\nNo sessions. No Git writes. No hosting integrations.\n? / Esc / q closes help.";
+const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page down/up (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk in this file\n / then n/N        Search all diffs, next/previous match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n r                 Toggle file reviewed (in memory only)\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diff::{FileDiff, Snapshot, parse_patch};
     use ratatui::{Terminal, backend::TestBackend};
+    #[test]
+    fn help_fits_its_contents_instead_of_filling_large_terminals() {
+        let expected_width = HELP.lines().map(UnicodeWidthStr::width).max().unwrap() as u16 + 2;
+        let expected_height = HELP.lines().count() as u16 + 2;
+        for area in [Rect::new(0, 0, 120, 40), Rect::new(5, 3, 200, 80)] {
+            let (popup, lines) = help_layout(area);
+            assert_eq!(popup.width, expected_width);
+            assert_eq!(popup.height, expected_height);
+            assert_eq!(popup.x, area.x + (area.width - popup.width) / 2);
+            assert_eq!(popup.y, area.y + (area.height - popup.height) / 2);
+            assert_eq!(lines.join("\n"), HELP);
+        }
+    }
+
+    #[test]
+    fn help_wraps_and_scrolls_on_small_terminals_then_resets_on_resize() {
+        let mut app = App::new(Snapshot {
+            root: "/repo".into(),
+            head: "abc".into(),
+            files: vec![],
+        });
+        let mut ui = Ui::default();
+        app.mode = Mode::Help(usize::MAX);
+        let area = Rect::new(0, 0, 45, 12);
+        let (popup, lines) = help_layout(area);
+        assert_eq!((popup.width, popup.height), (43, 10));
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.width() <= popup.width as usize - 2)
+        );
+        assert!(lines.len() > popup.height as usize - 2);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal.draw(|f| ui.draw(f, &mut app)).unwrap();
+        assert!(matches!(app.mode, Mode::Help(scroll) if scroll == lines.len() - 8));
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| ui.draw(f, &mut app)).unwrap();
+        assert!(matches!(app.mode, Mode::Help(0)));
+    }
+
     #[test]
     fn render_diff_summary_editor_and_small_terminal() {
         let mut a = App::new(Snapshot {
