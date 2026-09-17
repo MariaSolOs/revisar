@@ -374,6 +374,7 @@ impl App {
         };
         if let Some((i, _)) = target {
             self.views[self.file].row = i;
+            self.views[self.file].center = true;
         }
     }
 

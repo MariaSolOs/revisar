@@ -89,8 +89,8 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | `q`                 | Cancel without sending                          |
 | `?`                 | Help                                            |
 
-In the diff, `Ctrl-d/u`, PageDown/PageUp, and search jumps (`/`, `n`/`N`)
-recenter the cursor like Neovim's `zz`. `j/k` and the arrow keys keep normal
+In the diff, `Ctrl-d/u`, PageDown/PageUp, hunk jumps (`[`/`]`), and search jumps
+(`/`, `n`/`N`) recenter the cursor like Neovim's `zz`. `j/k` and the arrow keys keep normal
 line-by-line movement. Near the start of a file, centering stops at the first row.
 
 In the comment editor, `Enter` or `Ctrl-s` keeps the comment **in memory**;
