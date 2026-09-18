@@ -45,8 +45,9 @@ def run(mode):
                 if mode == "stale":
                     Path(repo, "a.rs").write_text("changed during review\n")
                 os.write(fd, b"q" if mode == "cancel" else b"S")
-                read_until(b"Confirm")
-                os.write(fd, b"y")
+                if mode == "cancel":
+                    read_until(b"Confirm")
+                    os.write(fd, b"y")
                 if mode == "stale":
                     read_until(b"stale-snapshot")
                     os.write(fd, b"y")
@@ -75,6 +76,8 @@ def run(mode):
                 assert b'(old side, HEAD)' in text, text
                 assert b"\x1b" not in text, text
                 assert (b"WARNING:" in text) == (mode == "stale"), text
+            if mode == "send":
+                assert b"Confirm" not in screen, "send unexpectedly asked for confirmation"
             assert b"\x1b[?1049l" in screen, "alternate screen was not restored"
             attrs = termios.tcgetattr(fd)
             assert attrs[3] & termios.ICANON, "terminal left in raw mode"

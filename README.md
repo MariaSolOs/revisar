@@ -46,7 +46,7 @@ Do not also add the implementation to Pi's `settings.json`: that would register
 set it up instead of breaking Pi startup.
 
 In Pi, run `/reload`, then `/revisar` after the agent has finished. A new Ghostty
-tab opens. Write comments, then press **S** and confirm to send the whole review
+tab opens. Write comments, then press **S** to send the whole review immediately
 to the same Pi conversation and close the tab. **q** cancels; comments require
 confirmation before being discarded. Your existing `/tuicr` extension is untouched.
 
@@ -67,7 +67,7 @@ then exits successfully so cancellation is not treated as a terminal failure.
 - Line, range, file, and general comments. Comments include source coordinates,
   old/new side, base HEAD, and the selected code excerpt in the agent's feedback.
 - Diff search, hunk navigation, and comment summary.
-- Before Send, revisar checks the snapshot again. Changed files require a second
+- Before Send, revisar checks the snapshot again. Changed files require
   confirmation and add a warning that the original line numbers may be stale.
 
 | Key                 | Action                                          |

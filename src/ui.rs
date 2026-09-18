@@ -109,7 +109,6 @@ impl Ui {
             ),
             Mode::Confirm(c) => {
                 let prompt = match c {
-                    Confirmation::Send => format!("Send {} comment(s) to the agent and close?\n\nNothing is saved for later.", app.comments.len()),
                     Confirmation::Stale => "The working tree changed since this review opened.\n\nSend comments with an explicit stale-snapshot warning? The agent will receive the original code excerpts and line anchors.".into(),
                     Confirmation::Discard => format!("Discard all {} comment(s) and close?\n\nNothing will be sent or saved.", app.comments.len()),
                     Confirmation::Delete(_) => "Delete this comment from the review?".into(),
@@ -676,7 +675,6 @@ mod tests {
         let mut ui = Ui::default();
         for (width, height) in [(45, 12), (60, 20), (120, 40)] {
             for confirmation in [
-                Confirmation::Send,
                 Confirmation::Stale,
                 Confirmation::Discard,
                 Confirmation::Delete(0),
@@ -771,11 +769,6 @@ mod tests {
             terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
             assert_eq!(*terminal.backend().buffer(), before);
         }
-        app.mode = Mode::Confirm(Confirmation::Send);
-        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
-        let text = screen_text(&terminal);
-        assert!(text.contains("Send 1 comment(s) to the agent and close?"));
-        assert!(!text.contains("reviewed"));
         assert!(!HELP.contains("Toggle file reviewed"));
     }
 

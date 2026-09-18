@@ -22,7 +22,6 @@ pub struct Draft {
 
 #[derive(Clone, Copy)]
 pub enum Confirmation {
-    Send,
     Stale,
     Discard,
     Delete(usize),
@@ -157,7 +156,6 @@ impl App {
                 if matches!(key.code, KeyCode::Char('y') | KeyCode::Enter) {
                     self.mode = Mode::Normal;
                     return match confirmation {
-                        Confirmation::Send => Action::Send,
                         Confirmation::Stale => Action::SendStale,
                         Confirmation::Discard => Action::Cancel,
                         Confirmation::Delete(i) => {
@@ -228,7 +226,7 @@ impl App {
                 if self.comments.is_empty() {
                     self.message = "No comments to send. q closes without feedback.".into();
                 } else {
-                    self.mode = Mode::Confirm(Confirmation::Send);
+                    return Action::Send;
                 }
             }
             KeyCode::Char('s') => {
@@ -543,12 +541,19 @@ mod tests {
         assert_eq!(press(&mut a, 'q'), Action::Continue);
         assert!(matches!(a.mode, Mode::Confirm(Confirmation::Discard)));
         press(&mut a, 'n');
-        press(&mut a, 'S');
-        assert_eq!(press(&mut a, 'y'), Action::Send);
+        assert_eq!(press(&mut a, 'S'), Action::Send);
+        assert!(matches!(a.mode, Mode::Normal));
         press(&mut a, 's');
         press(&mut a, 'd');
         press(&mut a, 'y');
         assert!(a.comments.is_empty());
+    }
+    #[test]
+    fn send_without_comments_stays_in_review() {
+        let mut a = app();
+        assert_eq!(press(&mut a, 'S'), Action::Continue);
+        assert!(matches!(a.mode, Mode::Normal));
+        assert!(a.message.contains("No comments to send"));
     }
     #[test]
     fn numbered_g_uses_source_lines_preferring_new_then_old() {
