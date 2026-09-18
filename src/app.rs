@@ -59,6 +59,7 @@ pub struct App {
     pub matches: Vec<(usize, usize)>,
     pub message: String,
     pub height: usize,
+    line_prefix: Option<usize>,
 }
 
 impl App {
@@ -79,6 +80,7 @@ impl App {
             matches: vec![],
             message: String::new(),
             height: 20,
+            line_prefix: None,
         }
     }
 
@@ -193,6 +195,23 @@ impl App {
             Mode::Normal => (),
         }
         self.message.clear();
+        let line_prefix = self.line_prefix.take();
+        if !self.files_focused
+            && !self.summary
+            && !self.snapshot.files.is_empty()
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            && let KeyCode::Char(digit @ '0'..='9') = key.code
+        {
+            let line = line_prefix
+                .unwrap_or(0)
+                .saturating_mul(10)
+                .saturating_add((digit as u8 - b'0') as usize);
+            self.line_prefix = Some(line);
+            self.message = format!("{line} (G: jump to line, Esc: cancel)");
+            return Action::Continue;
+        }
         if ctrl {
             match key.code {
                 KeyCode::Char('c') => return self.quit(),
@@ -233,7 +252,14 @@ impl App {
             KeyCode::PageDown => self.page(2),
             KeyCode::PageUp => self.page(-2),
             KeyCode::Char('g') | KeyCode::Home => self.move_by(isize::MIN),
-            KeyCode::Char('G') | KeyCode::End => self.move_by(isize::MAX),
+            KeyCode::Char('G') => {
+                if let Some(line) = line_prefix {
+                    self.jump_line(line);
+                } else {
+                    self.move_by(isize::MAX);
+                }
+            }
+            KeyCode::End => self.move_by(isize::MAX),
             KeyCode::Char('{') => self.change_file(self.file.saturating_sub(1)),
             KeyCode::Char('}') => self.change_file(self.file.saturating_add(1)),
             KeyCode::Char('a') => self.draft(Anchor::general()),
@@ -356,6 +382,23 @@ impl App {
             {
                 view.center = true;
             }
+        }
+    }
+
+    fn jump_line(&mut self, line: usize) {
+        let Some(file) = self.snapshot.files.get(self.file) else {
+            return;
+        };
+        let target = file
+            .rows
+            .iter()
+            .position(|row| row.new == Some(line))
+            .or_else(|| file.rows.iter().position(|row| row.old == Some(line)));
+        if let Some(row) = target {
+            self.views[self.file].row = row;
+            self.views[self.file].center = true;
+        } else {
+            self.message = format!("Line {line} is not shown in this diff");
         }
     }
 
@@ -508,6 +551,115 @@ mod tests {
         assert!(a.comments.is_empty());
     }
     #[test]
+    fn numbered_g_uses_source_lines_preferring_new_then_old() {
+        let mut a = app();
+        a.snapshot.files[0].rows = crate::diff::parse_patch(
+            "diff --git a/a.rs b/a.rs\n@@ -10,3 +10,2 @@\n-old\n+new\n context\n-deleted\n@@ -30 +29 @@\n later\n",
+        )
+        .unwrap();
+        for (keys, row) in [("10G", 2), ("11G", 3), ("12G", 4), ("29G", 6), ("30G", 6)] {
+            for key in keys.chars() {
+                press(&mut a, key);
+            }
+            assert_eq!(a.views[0].row, row, "{keys}");
+            assert!(a.views[0].center);
+            assert!(a.line_prefix.is_none());
+        }
+        press(&mut a, 'g');
+        assert_eq!(a.views[0].row, 0);
+        press(&mut a, 'G');
+        assert_eq!(a.views[0].row, 6);
+
+        a.snapshot.files[0].status = 'D';
+        a.snapshot.files[0].rows =
+            crate::diff::parse_patch("@@ -1,2 +0,0 @@\n-one\n-two\n").unwrap();
+        for key in "1G".chars() {
+            press(&mut a, key);
+        }
+        assert_eq!(a.views[0].row, 1);
+    }
+
+    #[test]
+    fn missing_lines_zero_and_overflow_leave_the_cursor_unchanged() {
+        let mut a = app();
+        for keys in ["0G", "42G", "999999999999999999999999999999999999999G"] {
+            for key in keys.chars() {
+                press(&mut a, key);
+            }
+            assert_eq!(a.views[0].row, 0);
+            assert!(!a.views[0].center);
+            assert!(a.message.contains("is not shown in this diff"));
+            assert!(a.line_prefix.is_none());
+        }
+        a.snapshot.files[0].rows = crate::diff::parse_patch("Binary files differ\n").unwrap();
+        for key in "1G".chars() {
+            press(&mut a, key);
+        }
+        assert_eq!(a.views[0].row, 0);
+        assert!(a.message.contains("is not shown in this diff"));
+    }
+
+    #[test]
+    fn line_prefix_is_visible_and_cleared_by_other_commands() {
+        for key in [
+            KeyCode::Esc,
+            KeyCode::Char('j'),
+            KeyCode::Char('?'),
+            KeyCode::Char('/'),
+            KeyCode::Char('c'),
+            KeyCode::Char('s'),
+            KeyCode::Char('}'),
+            KeyCode::Tab,
+            KeyCode::End,
+        ] {
+            let mut a = app();
+            press(&mut a, '1');
+            press(&mut a, '2');
+            assert_eq!(a.line_prefix, Some(12));
+            assert!(a.message.starts_with("12 (G:"));
+            assert_eq!(a.views[0].row, 0);
+            a.event(Event::Key(key.into()));
+            assert!(a.line_prefix.is_none(), "{key:?}");
+        }
+        let mut a = app();
+        press(&mut a, '1');
+        a.event(Event::Key(KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(a.line_prefix.is_none());
+        press(&mut a, 'G');
+        assert_eq!(a.views[0].row, 2);
+    }
+
+    #[test]
+    fn line_prefix_is_limited_to_the_diff_and_preserves_range_selection() {
+        let mut a = app();
+        a.files_focused = true;
+        press(&mut a, '1');
+        assert!(a.line_prefix.is_none());
+        a.files_focused = false;
+        a.summary = true;
+        press(&mut a, '1');
+        assert!(a.line_prefix.is_none());
+        a.summary = false;
+        press(&mut a, '/');
+        press(&mut a, '1');
+        assert!(matches!(&a.mode, Mode::Search(editor) if editor.text() == "1"));
+        a.event(Event::Key(KeyCode::Esc.into()));
+        press(&mut a, 'a');
+        press(&mut a, '2');
+        assert!(matches!(&a.mode, Mode::Comment(draft) if draft.editor.text() == "2"));
+        a.event(Event::Key(KeyCode::Esc.into()));
+        press(&mut a, 'v');
+        for key in "1G".chars() {
+            press(&mut a, key);
+        }
+        assert_eq!(a.selection, Some(0));
+        assert_eq!(a.views[0].row, 2);
+    }
+
+    #[test]
     fn paging_other_panels_does_not_request_diff_centering() {
         let mut a = app();
         a.files_focused = true;
@@ -537,7 +689,7 @@ mod tests {
             head: "".into(),
             files: vec![],
         });
-        for c in "jkgG{}[]vcrCSsdi/nN".chars() {
+        for c in "123GjkgG{}[]vcrCSsdi/nN".chars() {
             press(&mut a, c);
         }
     }

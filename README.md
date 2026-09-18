@@ -76,6 +76,7 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | `h` / `l`           | Scroll the diff horizontally                    |
 | `Ctrl-d` / `Ctrl-u` | Half-page down / up                             |
 | `g` / `G`           | First / last row                                |
+| `<number>G`         | Jump to a source line in the current diff        |
 | `Tab`               | Focus file sidebar / diff                       |
 | `{` / `}`           | Previous / next file                            |
 | `[` / `]`           | Previous / next hunk in the file                |
@@ -89,7 +90,13 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | `q`                 | Cancel without sending                          |
 | `?`                 | Help                                            |
 
-In the diff, `Ctrl-d/u`, PageDown/PageUp, hunk jumps (`[`/`]`), and search jumps
+Type a line number followed by `G` (for example, `42G`) to jump to that source
+line in the current file's diff. New-side line numbers take precedence, with an
+old-side fallback for deleted lines/files. If neither side shows the line, the
+cursor stays put and a message explains why. `Esc` or any other command clears
+the pending number; bare `G` still moves to the last row.
+
+In the diff, `<number>G`, `Ctrl-d/u`, PageDown/PageUp, hunk jumps (`[`/`]`), and search jumps
 (`/`, `n`/`N`) recenter the cursor like Neovim's `zz`. `j/k` and the arrow keys keep normal
 line-by-line movement. Near the start of a file, centering stops at the first row.
 

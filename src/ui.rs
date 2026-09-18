@@ -480,7 +480,7 @@ fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hin
 
 const COMMENT_HINT: &str = "Enter/Ctrl-s: keep   Esc: discard\nShift-Enter/Ctrl-j: newline";
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Center previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Center previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
@@ -857,6 +857,30 @@ mod tests {
             terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
             assert_eq!(app.views[0].top, 25);
         }
+    }
+
+    #[test]
+    fn numbered_g_centers_source_lines_and_shows_the_pending_number() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut app = navigation_app();
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 25)).unwrap();
+        for key in "45".chars() {
+            navigate(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
+        }
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        assert_eq!(app.views[0].row, 0);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 24)].symbol(), "4");
+        assert_eq!(buffer[(1, 24)].symbol(), "5");
+        navigate(&mut app, KeyCode::Char('G'), KeyModifiers::SHIFT);
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        assert_eq!((app.views[0].row, app.views[0].top), (45, 35));
+        assert!(!app.views[0].center);
+        assert_eq!(terminal.backend().buffer()[(31, 12)].symbol(), ">");
+        navigate(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+        assert_eq!((app.views[0].row, app.views[0].top), (46, 35));
     }
 
     #[test]
