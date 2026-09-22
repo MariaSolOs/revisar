@@ -2,7 +2,15 @@
 // Ghostty's native API is mocked; the generated shell wrapper executes for real.
 import assert from "node:assert/strict";
 import { execFile as realExecFile, spawn } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+    access,
+    mkdir,
+    mkdtemp,
+    readFile,
+    rm,
+    writeFile,
+} from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { mock, test } from "node:test";
@@ -17,13 +25,18 @@ const realExec = promisify(realExecFile);
 let scenario;
 const quote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function execFile() {}
-execFile[promisify.custom] = (file, args) => {
+execFile[promisify.custom] = (file, args, options) => {
     const stdin = new PassThrough();
     const chunks = [];
     stdin.on("data", (chunk) => chunks.push(chunk));
     const finished = new Promise((resolve) => stdin.on("finish", resolve));
     const pending = (async () => {
-        if (file === "git") return { stdout: `${scenario.root}\n`, stderr: "" };
+        if (file === "git") {
+            assert.deepEqual(args, ["rev-parse", "--show-toplevel"]);
+            scenario.gitCwd = options.cwd;
+            if (scenario.gitError) throw new Error("not a git repository");
+            return { stdout: `${scenario.root}\n`, stderr: "" };
+        }
         if (file.endsWith("osascript")) {
             assert.equal(args[0], "-e");
             assert(!args[1].includes("System Events"));
@@ -145,6 +158,7 @@ test("explicit send delivers once, then removes transport", async (t) => {
     assert.deepEqual(h.sent, [
         { text: "review feedback", options: { deliverAs: "followUp" } },
     ]);
+    assert.equal(scenario.gitCwd, h.ctx.cwd);
     assert.equal(h.statuses.at(-1), undefined);
     assert.equal(scenario.status, "0");
     assert.deepEqual(scenario.closed, ["review-tab-id"]);
@@ -220,6 +234,94 @@ test("failed launch never closes an unrelated tab", async (t) => {
     await assert.rejects(access(scenario.dir), { code: "ENOENT" });
 });
 
+test("--repo resolves paths from Pi's cwd and runs the wrapper in the Git root", async (t) => {
+    const cases = [
+        ["relative", () => "--repo ../other"],
+        ["equals", () => "--repo=../other"],
+        ["single quotes", () => "--repo '../other repo'"],
+        ["double quotes", () => '--repo="../other repo"'],
+        ["absolute with apostrophe", (root) => `--repo "${root}/other's repo"`],
+        [
+            "home",
+            (root) => `--repo "~/${path.relative(os.homedir(), root)}/other"`,
+        ],
+        ["home only", () => "--repo=~"],
+    ];
+    for (const [name, args] of cases) {
+        await t.test(name, async (t) => {
+            const h = await setup(t, { program: "pwd -P\n" });
+            const root = scenario.root;
+            h.ctx.cwd = path.join(root, "session");
+            await mkdir(h.ctx.cwd);
+            const target = path.join(
+                root,
+                name.includes("quotes")
+                    ? "other repo"
+                    : name.includes("apostrophe")
+                      ? "other's repo"
+                      : "other",
+            );
+            await mkdir(target);
+            await h.run(args(root));
+            assert.equal(
+                scenario.gitCwd,
+                name === "home only" ? os.homedir() : target,
+            );
+            // The mock reports a parent Git root, as for a repo subdirectory.
+            assert.deepEqual(h.sent, [
+                { text: root, options: { deliverAs: "followUp" } },
+            ]);
+            assert.equal(h.ctx.cwd, path.join(root, "session"));
+            await assert.rejects(access(scenario.dir), { code: "ENOENT" });
+        });
+    }
+});
+
+test("invalid --repo arguments never inspect Git or launch", async (t) => {
+    const h = await setup(t);
+    for (const args of [
+        "--staged",
+        "other",
+        "--repo",
+        "--repo=",
+        '--repo ""',
+        "--repo --staged",
+        "--repo ../other extra",
+        "--repo ../other --repo ../another",
+        '--repo "unterminated',
+        "--repo='mismatched\"",
+    ]) {
+        await h.run(args);
+        assert.match(
+            h.notifications.at(-1),
+            /Usage: \/revisar \[--repo <path>\]/,
+        );
+    }
+    assert.equal(scenario.gitCwd, undefined);
+    assert.equal(scenario.command, undefined);
+    assert.equal(h.sent.length, 0);
+});
+
+test("missing paths, files, and non-repositories do not launch", async (t) => {
+    const h = await setup(t);
+    await writeFile(path.join(h.ctx.cwd, "file"), "not a directory");
+    for (const target of ["missing", "file"]) {
+        await h.run(`--repo ${target}`);
+        assert.match(h.notifications.at(-1), /Invalid --repo/);
+        assert.equal(scenario.gitCwd, undefined);
+    }
+    scenario.gitError = true;
+    await h.run("--repo .");
+    assert.match(h.notifications.at(-1), /not a git repository/);
+    assert.equal(scenario.command, undefined);
+    assert.equal(scenario.dir, undefined);
+    assert.equal(h.sent.length, 0);
+    // Validation failures must release the active-review guard.
+    scenario.gitError = false;
+    await h.run();
+    assert.equal(h.sent.length, 1);
+});
+
 test("busy agent and unexpected arguments do not launch", async (t) => {
     const h = await setup(t);
     h.ctx.isIdle = () => false;
@@ -227,7 +329,7 @@ test("busy agent and unexpected arguments do not launch", async (t) => {
     assert(h.notifications.some((n) => n.includes("Wait for the agent")));
     h.ctx.isIdle = () => true;
     await h.run("--staged");
-    assert(h.notifications.some((n) => n.includes("no arguments")));
+    assert(h.notifications.some((n) => n.includes("Usage: /revisar")));
     assert.equal(scenario.command, undefined);
     assert.equal(h.sent.length, 0);
 });

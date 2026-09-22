@@ -50,6 +50,14 @@ tab opens. Write comments, then press **S** to send the whole review immediately
 to the same Pi conversation and close the tab. **q** cancels; comments require
 confirmation before being discarded. Your existing `/tuicr` extension is untouched.
 
+To review another folder, use `/revisar --repo ../other-project` or
+`/revisar --repo="~/Code/other project"`. Both `--repo <path>` and `--repo=<path>`
+accept absolute paths, paths relative to Pi's working directory, and `~`/`~/...`.
+Quote paths containing spaces. The review covers the target's whole Git working
+tree, even when the path names a subdirectory. Without `--repo`, it uses Pi's
+current working directory as before. Feedback still goes to the same conversation
+and includes the reviewed repository's root; Pi's working directory is unchanged.
+
 On macOS, the launcher uses Ghostty 1.3's native AppleScript API and needs
 Automation permission to control Ghostty. The wrapper runs as the new tab's
 command with `wait after command` disabled. Cleanup closes that tab by its

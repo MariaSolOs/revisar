@@ -1,5 +1,12 @@
 import { execFile, spawn } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+    access,
+    mkdtemp,
+    readFile,
+    rm,
+    stat,
+    writeFile,
+} from "node:fs/promises";
 import { constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +25,21 @@ const REVIEW_TIMEOUT = 4 * 60 * 60 * 1000;
 
 function quote(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function parseRepo(args: string): string | undefined {
+    const raw = args.trim();
+    if (!raw) return undefined;
+    const match = raw.match(
+        /^--repo(?:\s+|=)(?:"([^"]*)"|'([^']*)'|([^\s"']+))$/,
+    );
+    const repo = match?.[1] ?? match?.[2] ?? match?.[3];
+    if (!repo || repo.startsWith("--")) {
+        throw new Error("Usage: /revisar [--repo <path>] (working tree only)");
+    }
+    if (repo === "~") return os.homedir();
+    if (repo.startsWith("~/")) return path.join(os.homedir(), repo.slice(2));
+    return repo;
 }
 
 async function run(
@@ -185,7 +207,7 @@ export default function revisarExtension(pi: ExtensionAPI) {
 
     pi.registerCommand("revisar", {
         description:
-            "Review working-tree changes in a Ghostty tab. Send passes comments directly to this agent; cancel discards them.",
+            "Review working-tree changes in a Ghostty tab. Send passes comments directly to this agent; cancel discards them. Usage: /revisar [--repo <path>]",
         handler: async (args, ctx) => {
             if (ctx.mode !== "tui") {
                 ctx.ui.notify(
@@ -194,13 +216,14 @@ export default function revisarExtension(pi: ExtensionAPI) {
                 );
                 return;
             }
-            if (args.trim()) {
-                ctx.ui.notify(
-                    "Usage: /revisar (working tree only; no arguments)",
-                    "warning",
-                );
+            let repo: string | undefined;
+            try {
+                repo = parseRepo(args);
+            } catch (error) {
+                ctx.ui.notify((error as Error).message, "warning");
                 return;
             }
+            const targetCwd = repo ? path.resolve(ctx.cwd, repo) : ctx.cwd;
             if (active) {
                 ctx.ui.notify("A revisar review is already open", "warning");
                 return;
@@ -222,6 +245,16 @@ export default function revisarExtension(pi: ExtensionAPI) {
             let tabId: string | undefined;
             let handedOff = false;
             try {
+                if (repo) {
+                    try {
+                        if (!(await stat(targetCwd)).isDirectory())
+                            throw new Error("path is not a directory");
+                    } catch (error) {
+                        throw new Error(
+                            `Invalid --repo ${targetCwd}: ${(error as Error).message}`,
+                        );
+                    }
+                }
                 await access(REVISAR, constants.X_OK).catch(() => {
                     throw new Error(
                         `Build revisar first: cd ${quote(CHECKOUT)} && cargo build --release --locked`,
@@ -230,7 +263,7 @@ export default function revisarExtension(pi: ExtensionAPI) {
                 const result = await exec(
                     "git",
                     ["rev-parse", "--show-toplevel"],
-                    { cwd: ctx.cwd, timeout: 10_000, signal },
+                    { cwd: targetCwd, timeout: 10_000, signal },
                 );
                 const root = result.stdout.replace(/\n$/, "");
                 signal.throwIfAborted();
