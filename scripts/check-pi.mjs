@@ -48,7 +48,7 @@ try {
             2,
         ),
     );
-    run("tsgo", ["-p", config]);
+    run("tsc", ["-p", config]);
     run("prettier", [
         "--check",
         "integrations/pi",

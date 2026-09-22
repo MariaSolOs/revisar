@@ -159,7 +159,7 @@ approval or starting an agent turn. `--help` and `--version` are the only CLI fl
 
 This runs Rust formatting, Clippy, all Rust tests, a release build, and the Pi
 integration checks together. It requires Python 3, Node.js 22.18+, `npm`, a globally
-installed Pi, `tsgo`, and `prettier`. No dependencies are downloaded by the Pi
+installed Pi, `tsc`, and `prettier`. No dependencies are downloaded by the Pi
 checks: they discover the installed Pi through `npm root -g` (or `PI_PACKAGE_DIR`)
 and generate machine-specific type paths only under `target/`.
 
@@ -170,7 +170,7 @@ node scripts/check-pi.mjs
 ```
 
 When changing the installed loader, also follow your Pi-config validation rules:
-`cd ~/.pi/agent/extensions && tsgo -p tsconfig.json`.
+`cd ~/.pi/agent/extensions && tsc -p tsconfig.json`.
 
 Tests create disposable Git fixtures using libgit2 (a test-only dependency),
 exercise the read-only Git CLI backend, render with Ratatui's test backend, and

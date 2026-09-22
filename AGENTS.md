@@ -37,9 +37,9 @@ changes and sending comments immediately to the agent, not general code review.
 ```
 
 This includes `cargo fmt`, Clippy with warnings denied, locked tests and release
-build, `tsgo`, Prettier, and Node integration tests. For only the Pi checks after
+build, `tsc`, Prettier, and Node integration tests. For only the Pi checks after
 building, use `node scripts/check-pi.mjs`. Node.js 22.18+, globally installed Pi,
-`npm`, `tsgo`, and `prettier` are required.
+`npm`, `tsc`, and `prettier` are required.
 
 Python 3 is needed for PTY tests. Keep Cargo.lock checked in. Test fixtures stay
 under `target/`. There is no Git repository initialized in a fresh checkout
