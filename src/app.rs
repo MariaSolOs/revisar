@@ -5,11 +5,15 @@ use crate::{
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct View {
     pub row: usize,
+    // Viewport top in screen rows (source rows when nowrap).
     pub top: usize,
     pub left: usize,
+    // Wrapped screen-row starts, including an end sentinel; populated by the UI.
+    pub row_starts: Vec<usize>,
+    pub continuation: usize,
     // One-shot request, applied with the actual viewport height on the next draw.
     pub center: bool,
 }
@@ -52,6 +56,7 @@ pub struct App {
     pub files_focused: bool,
     pub selection: Option<usize>,
     pub summary: bool,
+    pub wrap: bool,
     pub comment: usize,
     pub summary_scroll: usize,
     pub query: String,
@@ -73,6 +78,7 @@ impl App {
             files_focused: false,
             selection: None,
             summary: false,
+            wrap: false,
             comment: 0,
             summary_scroll: 0,
             query: String::new(),
@@ -222,6 +228,14 @@ impl App {
         match key.code {
             KeyCode::Char('q') => return self.quit(),
             KeyCode::Char('?') => self.mode = Mode::Help(0),
+            KeyCode::Char('w') => {
+                self.wrap = !self.wrap;
+                for view in &mut self.views {
+                    view.continuation = 0;
+                    view.center = true;
+                }
+                self.message = if self.wrap { "wrap" } else { "nowrap" }.into();
+            }
             KeyCode::Char('S') => {
                 if self.comments.is_empty() {
                     self.message = "No comments to send. q closes without feedback.".into();
@@ -292,10 +306,10 @@ impl App {
             _ if self.snapshot.files.is_empty() => (),
             KeyCode::Char('C') => self.draft(Anchor::file(&self.snapshot.files[self.file])),
             _ if self.summary || self.files_focused => (),
-            KeyCode::Char('h') | KeyCode::Left => {
+            KeyCode::Char('h') | KeyCode::Left if !self.wrap => {
                 self.views[self.file].left = self.views[self.file].left.saturating_sub(4)
             }
-            KeyCode::Char('l') | KeyCode::Right => {
+            KeyCode::Char('l') | KeyCode::Right if !self.wrap => {
                 self.views[self.file].left = (self.views[self.file].left + 4).min(100_000)
             }
             KeyCode::Char('[') => self.hunk(false),
@@ -362,6 +376,7 @@ impl App {
                 .min(self.comments.len().saturating_sub(1));
             self.summary_scroll = 0;
         } else if let Some(view) = self.views.get_mut(self.file) {
+            view.continuation = 0;
             view.row = view
                 .row
                 .saturating_add_signed(delta)
@@ -373,6 +388,18 @@ impl App {
         let amount = direction * (self.height / 2).max(1) as isize;
         if self.summary && !self.files_focused {
             self.summary_scroll = self.summary_scroll.saturating_add_signed(amount);
+        } else if self.wrap
+            && !self.files_focused
+            && let Some(view) = self.views.get_mut(self.file)
+            && let Some(&total) = view.row_starts.last()
+            && total > 0
+        {
+            let screen = (view.row_starts[view.row] + view.continuation)
+                .saturating_add_signed(amount)
+                .min(total - 1);
+            view.row = view.row_starts.partition_point(|&start| start <= screen) - 1;
+            view.continuation = screen - view.row_starts[view.row];
+            view.center = true;
         } else {
             self.move_by(amount);
             if !self.files_focused
@@ -394,6 +421,7 @@ impl App {
             .or_else(|| file.rows.iter().position(|row| row.old == Some(line)));
         if let Some(row) = target {
             self.views[self.file].row = row;
+            self.views[self.file].continuation = 0;
             self.views[self.file].center = true;
         } else {
             self.message = format!("Line {line} is not shown in this diff");
@@ -415,6 +443,7 @@ impl App {
         };
         if let Some((i, _)) = target {
             self.views[self.file].row = i;
+            self.views[self.file].continuation = 0;
             self.views[self.file].center = true;
         }
     }
@@ -437,6 +466,7 @@ impl App {
         if let Some((f, r)) = target {
             self.change_file(f);
             self.views[f].row = r;
+            self.views[f].continuation = 0;
             self.views[f].left = 0;
             self.views[f].center = true;
             self.summary = false;
@@ -489,6 +519,7 @@ impl App {
             .position(|f| Some(&f.path) == anchor.path.as_ref())
         {
             self.change_file(f);
+            self.views[f].continuation = 0;
             if let Some(start) = anchor.start {
                 self.views[f].row = self.snapshot.files[f]
                     .rows
@@ -530,6 +561,52 @@ mod tests {
             KeyModifiers::NONE,
         )))
     }
+    #[test]
+    fn wrap_toggle_is_session_wide_and_does_not_consume_editor_input() {
+        let mut a = app();
+        assert!(!a.wrap);
+        press(&mut a, 'l');
+        assert_eq!(a.views[0].left, 4);
+        a.selection = Some(0);
+        press(&mut a, 'w');
+        assert!(a.wrap);
+        assert_eq!(a.message, "wrap");
+        assert_eq!(a.selection, Some(0));
+        for code in [
+            KeyCode::Char('h'),
+            KeyCode::Char('l'),
+            KeyCode::Left,
+            KeyCode::Right,
+        ] {
+            a.event(Event::Key(code.into()));
+            assert_eq!(a.views[0].left, 4);
+        }
+        press(&mut a, '/');
+        press(&mut a, 'w');
+        assert!(a.wrap);
+        assert!(matches!(&a.mode, Mode::Search(editor) if editor.text() == "w"));
+        a.event(Event::Key(KeyCode::Esc.into()));
+        press(&mut a, 'a');
+        press(&mut a, 'w');
+        assert!(matches!(&a.mode, Mode::Comment(draft) if draft.editor.text() == "w"));
+        a.event(Event::Key(KeyCode::Esc.into()));
+        press(&mut a, '?');
+        press(&mut a, 'w');
+        assert!(a.wrap);
+        a.event(Event::Key(KeyCode::Esc.into()));
+        a.files_focused = true;
+        press(&mut a, 'w');
+        assert!(!a.wrap);
+        assert_eq!(a.message, "nowrap");
+        a.files_focused = false;
+        press(&mut a, 'l');
+        assert_eq!(a.views[0].left, 8);
+        a.snapshot.files.clear();
+        a.views.clear();
+        press(&mut a, 'w');
+        assert!(a.wrap);
+    }
+
     #[test]
     fn comment_submit_cancel_and_delete_are_explicit() {
         let mut a = app();
@@ -610,6 +687,7 @@ mod tests {
             KeyCode::Esc,
             KeyCode::Char('j'),
             KeyCode::Char('?'),
+            KeyCode::Char('w'),
             KeyCode::Char('/'),
             KeyCode::Char('c'),
             KeyCode::Char('s'),

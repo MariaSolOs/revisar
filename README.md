@@ -81,7 +81,8 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | Key                 | Action                                          |
 | ------------------- | ----------------------------------------------- |
 | `j` / `k`, arrows   | Move through lines, files, or comments          |
-| `h` / `l`           | Scroll the diff horizontally                    |
+| `h` / `l`           | Scroll the diff horizontally (nowrap only)      |
+| `w`                 | Toggle diff wrap / nowrap                       |
 | `Ctrl-d` / `Ctrl-u` | Half-page down / up                             |
 | `g` / `G`           | First / last row                                |
 | `<number>G`         | Jump to a source line in the current diff        |
@@ -107,6 +108,13 @@ the pending number; bare `G` still moves to the last row.
 In the diff, `<number>G`, `Ctrl-d/u`, PageDown/PageUp, hunk jumps (`[`/`]`), and search jumps
 (`/`, `n`/`N`) recenter the cursor like Neovim's `zz`. `j/k` and the arrow keys keep normal
 line-by-line movement. Near the start of a file, centering stops at the first row.
+
+Press `w` to toggle diff wrapping for this session (default: nowrap). Wrapped
+continuations keep their source line's highlighting and comment anchors; `j/k`
+still move by source row. Paging moves by screen rows, so even a single line
+taller than the viewport can be read in full. `h/l` and left/right scrolling are
+disabled while wrapping; toggling back restores each file's horizontal position.
+The diff title shows `wrap` or `nowrap`. Comment editors and summaries always wrap.
 
 In the comment editor, `Enter` or `Ctrl-s` keeps the comment **in memory**;
 `Shift-Enter` or `Ctrl-j` inserts a newline; `Esc` discards that edit. Arrow keys,

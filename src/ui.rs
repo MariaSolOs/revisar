@@ -1,6 +1,6 @@
 use crate::{
     app::{App, Confirmation, Mode},
-    diff::{Kind, display_text},
+    diff::{Kind, Row, display_text},
     editor::Editor,
     theme::{self as t, Syntax},
 };
@@ -18,8 +18,21 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub struct Ui {
     syntax: Syntax,
     highlighted: HashMap<usize, Vec<Vec<Span<'static>>>>,
+    wrapped: Option<WrappedDiff>,
     files: ListState,
     comments: ListState,
+}
+
+struct WrappedDiff {
+    file: usize,
+    width: u16,
+    lines: Vec<WrappedLine>,
+}
+
+struct WrappedLine {
+    row: usize,
+    first: bool,
+    spans: Vec<Span<'static>>,
 }
 
 fn block(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
@@ -82,9 +95,9 @@ impl Ui {
         let hints = if app.summary {
             " s/Esc diff  j/k comments  Enter jump  i edit  d delete  Ctrl-d/u scroll  S Send"
         } else if app.selection.is_some() {
-            " RANGE  j/k extend  c comment  Esc cancel"
+            " RANGE  j/k extend  c comment  w wrap  Esc cancel"
         } else {
-            " j/k move  Tab files  c comment  v range  s summary  S Send  q cancel  ? help"
+            " j/k move  w wrap  Tab files  c comment  v range  s summary  S Send  q cancel  ? help"
         };
         frame.render_widget(
             Paragraph::new(vec![
@@ -183,7 +196,13 @@ impl Ui {
             .snapshot
             .files
             .get(app.file)
-            .map(|f| format!(" {} ", display_text(&f.path)))
+            .map(|f| {
+                format!(
+                    " {} [{}] ",
+                    display_text(&f.path),
+                    if app.wrap { "wrap" } else { "nowrap" }
+                )
+            })
             .unwrap_or(" Working tree ".into());
         let b = block(title, !app.files_focused);
         let inner = b.inner(area);
@@ -202,26 +221,65 @@ impl Ui {
             .entry(app.file)
             .or_insert_with(|| self.syntax.highlight(file));
         let view = &mut app.views[app.file];
+        if app.wrap
+            && self
+                .wrapped
+                .as_ref()
+                .is_none_or(|w| w.file != app.file || w.width != inner.width)
+        {
+            let mut lines = Vec::new();
+            view.row_starts.clear();
+            for (row, spans) in highlighted.iter().enumerate() {
+                view.row_starts.push(lines.len());
+                let gutter = 2 + diff_gutter(&file.rows[row]).len();
+                let width = (inner.width as usize).saturating_sub(gutter).max(1);
+                for (part, spans) in wrap_spans(spans, width).into_iter().enumerate() {
+                    lines.push(WrappedLine {
+                        row,
+                        first: part == 0,
+                        spans,
+                    });
+                }
+            }
+            view.row_starts.push(lines.len());
+            self.wrapped = Some(WrappedDiff {
+                file: app.file,
+                width: inner.width,
+                lines,
+            });
+            // A resize changes screen coordinates, not source coordinates.
+            view.center = true;
+        }
+        let wrapped = self.wrapped.as_ref().filter(|_| app.wrap);
+        let cursor = if wrapped.is_some() && view.row + 1 < view.row_starts.len() {
+            view.continuation = view
+                .continuation
+                .min(view.row_starts[view.row + 1] - view.row_starts[view.row] - 1);
+            view.row_starts[view.row] + view.continuation
+        } else {
+            view.row
+        };
         if std::mem::take(&mut view.center) {
             // Like zz: allow blank space below EOF, but never scroll above BOF.
-            view.top = view.row.saturating_sub(inner.height as usize / 2);
+            view.top = cursor.saturating_sub(inner.height as usize / 2);
         }
-        if view.row < view.top {
-            view.top = view.row;
+        if cursor < view.top {
+            view.top = cursor;
         }
-        if view.row >= view.top + inner.height as usize {
-            view.top = view.row + 1 - inner.height as usize;
+        if cursor >= view.top + inner.height as usize {
+            view.top = cursor + 1 - inner.height as usize;
         }
-        let view = *view;
-        for (screen_row, row_index) in (view.top..file.rows.len())
-            .take(inner.height as usize)
-            .enumerate()
-        {
+        let (current_row, top, left) = (view.row, view.top, view.left);
+        let total = wrapped.map_or(file.rows.len(), |w| w.lines.len());
+        for (screen_row, visual_row) in (top..total).take(inner.height as usize).enumerate() {
+            let part = wrapped.map(|w| &w.lines[visual_row]);
+            let row_index = part.map_or(visual_row, |p| p.row);
+            let first = part.is_none_or(|p| p.first);
             let row = &file.rows[row_index];
             let selected = app
                 .selection
-                .is_some_and(|a| (a.min(view.row)..=a.max(view.row)).contains(&row_index));
-            let current = row_index == view.row;
+                .is_some_and(|a| (a.min(current_row)..=a.max(current_row)).contains(&row_index));
+            let current = row_index == current_row;
             let has_comment = app
                 .comments
                 .iter()
@@ -252,13 +310,7 @@ impl Ui {
             } else {
                 " "
             };
-            let old = row.old.map_or(String::new(), |n| n.to_string());
-            let new = row.new.map_or(String::new(), |n| n.to_string());
-            let prefix = match row.kind {
-                Kind::Add => "+",
-                Kind::Delete => "-",
-                _ => " ",
-            };
+            let gutter_text = diff_gutter(row);
             let mut spans = vec![
                 Span::styled(marker, Style::default().fg(t::CURSOR)),
                 Span::styled(
@@ -266,14 +318,21 @@ impl Ui {
                     Style::default().fg(t::CYAN),
                 ),
                 Span::styled(
-                    format!("{old:>5} {new:>5} {prefix} "),
+                    if first {
+                        gutter_text
+                    } else {
+                        " ".repeat(gutter_text.len())
+                    },
                     Style::default().fg(fg),
                 ),
             ];
             let gutter: usize = spans.iter().map(Span::width).sum();
             let width = (inner.width as usize).saturating_sub(gutter);
-            let (mut code, more) =
-                crop(&highlighted[row_index], view.left, width.saturating_sub(1));
+            let (mut code, more) = if let Some(part) = part {
+                (part.spans.clone(), false)
+            } else {
+                crop(&highlighted[row_index], left, width.saturating_sub(1))
+            };
             if app.matches.binary_search(&(app.file, row_index)).is_ok() {
                 for s in &mut code {
                     s.style = s.style.add_modifier(Modifier::UNDERLINED);
@@ -356,6 +415,52 @@ impl Ui {
             .collect();
         frame.render_widget(Paragraph::new(visible), columns[1]);
     }
+}
+
+fn diff_gutter(row: &Row) -> String {
+    let old = row.old.map_or(String::new(), |n| n.to_string());
+    let new = row.new.map_or(String::new(), |n| n.to_string());
+    let prefix = match row.kind {
+        Kind::Add => "+",
+        Kind::Delete => "-",
+        _ => " ",
+    };
+    format!("{old:>5} {new:>5} {prefix} ")
+}
+
+// Hard-wrap without trimming whitespace or splitting wide/combining graphemes.
+fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut line = Vec::new();
+    let mut used = 0;
+    for span in spans {
+        let mut text = String::new();
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let symbol = grapheme.symbol;
+            let w = symbol.width();
+            if used + w > width && used > 0 {
+                if !text.is_empty() {
+                    line.push(Span::styled(std::mem::take(&mut text), span.style));
+                }
+                lines.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            // Only possible in a one-column code area; still make progress.
+            if w > width {
+                text.push('\u{fffd}');
+                used += 1;
+            } else {
+                text.push_str(symbol);
+                used += w;
+            }
+        }
+        if !text.is_empty() {
+            line.push(Span::styled(text, span.style));
+        }
+    }
+    lines.push(line);
+    lines
 }
 
 fn crop(spans: &[Span<'static>], left: usize, width: usize) -> (Vec<Span<'static>>, bool) {
@@ -479,13 +584,172 @@ fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hin
 
 const COMMENT_HINT: &str = "Enter/Ctrl-s: keep   Esc: discard\nShift-Enter/Ctrl-j: newline";
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Center previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Center previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diff::{FileDiff, Snapshot, parse_patch};
     use ratatui::{Terminal, backend::TestBackend};
+    fn wrapping_app(text: &str) -> App {
+        App::new(Snapshot {
+            root: "/repo".into(),
+            head: "abc".into(),
+            files: vec![FileDiff {
+                path: "file.txt".into(),
+                status: 'A',
+                patch: vec![],
+                rows: parse_patch(&format!("@@ -0,0 +1,2 @@\n+{text}\n+next\n")).unwrap(),
+            }],
+        })
+    }
+
+    #[test]
+    fn hard_wrap_preserves_whitespace_graphemes_and_styles() {
+        let style = Style::default().fg(t::PINK).add_modifier(Modifier::BOLD);
+        let spans = vec![Span::raw("  ab"), Span::styled("界e\u{301} 界", style)];
+        let lines = wrap_spans(&spans, 4);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| line.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(text, ["  ab", "界e\u{301} ", "界"]);
+        assert_eq!(lines[1][0].style, style);
+        assert_eq!(lines[2][0].style, style);
+        assert_eq!(wrap_spans(&[], 4).len(), 1);
+        assert_eq!(wrap_spans(&[Span::raw("abcd")], 4).len(), 1);
+        assert_eq!(wrap_spans(&[Span::raw("界")], 1)[0][0].content, "\u{fffd}");
+    }
+
+    #[test]
+    fn wrapped_diff_keeps_gutters_highlights_and_source_anchors() {
+        use crate::review::{Anchor, Comment};
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let text = format!("    {}{}END", "x".repeat(28), "界".repeat(16));
+        let mut app = wrapping_app(&text);
+        app.views[0].row = 1;
+        app.views[0].left = 4;
+        app.matches.push((0, 1));
+        app.comments.push(Comment {
+            anchor: Anchor::lines(&app.snapshot.files[0], 1, 1).unwrap(),
+            body: "Review".into(),
+        });
+        app.selection = Some(2);
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
+        navigate(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].row_starts, [0, 1, 4, 5]);
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(13, 2)].symbol(), "1");
+        assert_eq!(buffer[(15, 2)].symbol(), "+");
+        assert_eq!(buffer[(17, 2)].symbol(), " "); // Indentation is not trimmed.
+        assert_eq!(buffer[(17, 3)].symbol(), "界");
+        assert_eq!(buffer[(17, 4)].symbol(), "E");
+        for y in 2..=4 {
+            assert_eq!(buffer[(1, y)].symbol(), ">");
+            assert_eq!(buffer[(2, y)].symbol(), "*");
+            for x in 1..49 {
+                // Ratatui resets the hidden trailing cell of each wide glyph.
+                if y != 3 || x < 18 || x % 2 != 0 {
+                    assert_eq!(buffer[(x, y)].bg, t::COMMENT_SELECTED_BG);
+                }
+            }
+            assert!(buffer[(17, y)].modifier.contains(Modifier::UNDERLINED));
+            if y > 2 {
+                for x in 3..17 {
+                    assert_eq!(buffer[(x, y)].symbol(), " ");
+                }
+            }
+        }
+        assert_eq!(buffer[(17, 3)].fg, buffer[(21, 2)].fg);
+        assert_eq!(buffer[(17, 5)].bg, t::SELECTION);
+        assert_eq!(app.selection, Some(2));
+        navigate(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].left, 4);
+        assert_eq!(terminal.backend().buffer()[(17, 2)].symbol(), "x");
+        assert_eq!(terminal.backend().buffer()[(47, 2)].symbol(), ">");
+        assert_eq!(app.comments[0].anchor.excerpt, text);
+    }
+
+    #[test]
+    fn wrapped_paging_reaches_tall_line_tails_and_resize_keeps_anchor() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let text = format!("{}TAIL", "x".repeat(32 * 20));
+        let mut app = wrapping_app(&text);
+        app.views[0].row = 1;
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
+        navigate(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        for _ in 0..5 {
+            navigate(&mut app, KeyCode::Char('d'), KeyModifiers::CONTROL);
+            terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        }
+        assert_eq!(app.views[0].row, 1);
+        assert_eq!(app.views[0].continuation, 20);
+        assert_eq!(terminal.backend().buffer()[(17, 5)].symbol(), "T");
+        // Comments made while viewing a continuation still anchor the source line.
+        navigate(&mut app, KeyCode::Char('c'), KeyModifiers::NONE);
+        let Mode::Comment(draft) = &app.mode else {
+            panic!("expected comment");
+        };
+        assert_eq!(draft.anchor.start, Some(1));
+        assert_eq!(draft.anchor.excerpt, text);
+        navigate(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        let mut terminal = Terminal::new(TestBackend::new(82, 10)).unwrap();
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].row, 1);
+        assert_eq!(app.views[0].continuation, 10);
+        assert_eq!(terminal.backend().buffer()[(17, 5)].symbol(), "T");
+        navigate(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].row, 2);
+        assert_eq!(app.views[0].continuation, 0);
+        navigate(&mut app, KeyCode::Char('k'), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].row, 1);
+        assert_eq!(app.views[0].top, 1);
+    }
+
+    #[test]
+    fn wrapped_jumps_and_file_switches_use_screen_coordinates() {
+        use crossterm::event::{Event, KeyCode, KeyModifiers};
+        let mut app = wrapping_app(&"x".repeat(200));
+        let mut second = wrapping_app(&"y".repeat(400)).snapshot.files.remove(0);
+        second.path = "second.txt".into();
+        app.snapshot.files.push(second);
+        app.views.push(crate::app::View::default());
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
+        navigate(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        for key in "2G".chars() {
+            navigate(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
+        }
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].row, 2);
+        assert_eq!(app.views[0].top, 4); // Seven wrapped rows precede "next".
+        navigate(&mut app, KeyCode::Char('/'), KeyModifiers::NONE);
+        app.event(Event::Paste("next".into()));
+        navigate(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.file, 1);
+        assert_eq!(app.views[1].row, 2);
+        assert_eq!(app.views[1].top, 10);
+        assert_eq!(terminal.backend().buffer()[(17, 5)].symbol(), "n");
+        navigate(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.file, 0);
+        assert_eq!(app.views[0].top, 4);
+        assert_eq!(terminal.backend().buffer()[(17, 5)].symbol(), "n");
+        navigate(&mut app, KeyCode::Char('['), KeyModifiers::NONE);
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].row, 0);
+        assert_eq!(app.views[0].top, 0);
+    }
+
     #[test]
     fn commented_lines_and_ranges_have_full_width_backgrounds() {
         use crate::review::{Anchor, Comment};
@@ -930,7 +1194,7 @@ mod tests {
         ] {
             navigate(&mut app, KeyCode::Char(key), KeyModifiers::NONE);
             terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
-            let view = app.views[0];
+            let view = &app.views[0];
             assert_eq!(view.row, row);
             assert_eq!(view.top, row.saturating_sub(10));
             assert!(!view.center);
