@@ -4,3 +4,4 @@ pub mod editor;
 pub mod review;
 pub mod theme;
 pub mod ui;
+mod wrap;

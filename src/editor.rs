@@ -1,3 +1,4 @@
+use crate::wrap::word_ranges;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_width::UnicodeWidthChar;
 
@@ -112,27 +113,42 @@ impl Editor {
     // Visual rows and caret use terminal-cell widths, not bytes or code points.
     pub fn layout(&self, width: usize) -> (Vec<String>, usize, usize) {
         let width = width.max(2);
-        let mut rows = vec![String::new()];
-        let (mut x, mut caret_x, mut caret_y) = (0, 0, 0);
-        for (i, c) in self.chars.iter().chain(std::iter::once(&' ')).enumerate() {
-            let w = c.width().unwrap_or(0);
-            if *c != '\n' && x + w > width {
-                rows.push(String::new());
-                x = 0;
+        let mut rows: Vec<String> = Vec::new();
+        let (mut caret_x, mut caret_y) = (0, 0);
+        let mut offset = 0;
+        for line in self.chars.split(|c| *c == '\n') {
+            let units: Vec<_> = line
+                .iter()
+                .map(|c| (c.width().unwrap_or(0), c.is_whitespace()))
+                .collect();
+            for range in word_ranges(&units, width) {
+                // A caret at a soft break belongs to the following visual row.
+                if (offset + range.start..=offset + range.end).contains(&self.cursor) {
+                    caret_x = units[range.start..self.cursor - offset]
+                        .iter()
+                        .map(|(cells, _)| cells)
+                        .sum::<usize>()
+                        .min(width - 1);
+                    caret_y = rows.len();
+                }
+                rows.push(line[range].iter().collect());
             }
-            if i == self.cursor {
-                caret_x = x.min(width - 1);
+            offset += line.len() + 1;
+        }
+        // Reserve a cell for the end-of-input caret after an exactly full row,
+        // without letting that virtual cell influence word wrapping.
+        if rows
+            .last()
+            .unwrap()
+            .chars()
+            .map(|c| c.width().unwrap_or(0))
+            .sum::<usize>()
+            >= width
+        {
+            rows.push(String::new());
+            if self.cursor == self.chars.len() {
+                caret_x = 0;
                 caret_y = rows.len() - 1;
-            }
-            if i == self.chars.len() {
-                break;
-            }
-            if *c == '\n' {
-                rows.push(String::new());
-                x = 0;
-            } else {
-                rows.last_mut().unwrap().push(*c);
-                x += w;
             }
         }
         (rows, caret_x, caret_y)
@@ -142,6 +158,48 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn word_wrap_keeps_caret_on_the_reflowed_text() {
+        let mut editor = Editor::new("one two three");
+        for (cursor, expected) in [
+            (0, (0, 0)),
+            (7, (7, 0)),
+            (8, (0, 1)),
+            (10, (2, 1)),
+            (13, (5, 1)),
+        ] {
+            editor.cursor = cursor;
+            let (rows, x, y) = editor.layout(9);
+            assert_eq!(rows, ["one two ", "three"]);
+            assert_eq!((x, y), expected);
+            assert_eq!(editor.text(), "one two three");
+        }
+        editor.cursor = 8;
+        editor.insert("new ");
+        assert_eq!(
+            editor.layout(9),
+            (vec!["one two ".into(), "new three".into(), "".into()], 4, 1)
+        );
+    }
+
+    #[test]
+    fn word_wrap_preserves_newlines_and_full_row_caret() {
+        let mut editor = Editor::new("one two\n\n界界 end\n");
+        editor.cursor = 13;
+        let (rows, x, y) = editor.layout(6);
+        assert_eq!(rows, ["one ", "two", "", "界界 ", "end", ""]);
+        assert_eq!((x, y), (1, 4));
+        assert_eq!(
+            Editor::new("abcd").layout(4),
+            (vec!["abcd".into(), "".into()], 0, 1)
+        );
+        assert_eq!(
+            Editor::new("abcd\n").layout(4),
+            (vec!["abcd".into(), "".into()], 0, 1)
+        );
+        assert_eq!(Editor::new("").layout(4), (vec!["".into()], 0, 0));
+    }
+
     #[test]
     fn unicode_editing_and_paste() {
         let mut e = Editor::new("a界");

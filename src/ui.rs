@@ -3,6 +3,7 @@ use crate::{
     diff::{Kind, Row, display_text},
     editor::Editor,
     theme::{self as t, Syntax},
+    wrap::word_ranges,
 };
 use ratatui::{
     Frame,
@@ -428,39 +429,43 @@ fn diff_gutter(row: &Row) -> String {
     format!("{old:>5} {new:>5} {prefix} ")
 }
 
-// Hard-wrap without trimming whitespace or splitting wide/combining graphemes.
+// Word-wrap across syntax spans without trimming whitespace or splitting
+// wide/combining graphemes. Style boundaries are not word boundaries.
 fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
     let width = width.max(1);
-    let mut lines = Vec::new();
-    let mut line = Vec::new();
-    let mut used = 0;
-    for span in spans {
-        let mut text = String::new();
-        for grapheme in span.styled_graphemes(Style::default()) {
-            let symbol = grapheme.symbol;
-            let w = symbol.width();
-            if used + w > width && used > 0 {
-                if !text.is_empty() {
-                    line.push(Span::styled(std::mem::take(&mut text), span.style));
+    let graphemes: Vec<_> = spans
+        .iter()
+        .flat_map(|span| span.styled_graphemes(Style::default()))
+        .collect();
+    let units: Vec<_> = graphemes
+        .iter()
+        .map(|g| {
+            (
+                g.symbol.width().min(width),
+                g.symbol.chars().all(char::is_whitespace),
+            )
+        })
+        .collect();
+    word_ranges(&units, width)
+        .into_iter()
+        .map(|range| {
+            let mut line: Vec<Span<'static>> = Vec::new();
+            for g in &graphemes[range] {
+                // Only possible in a one-column code area; still make progress.
+                let symbol = if g.symbol.width() > width {
+                    "\u{fffd}"
+                } else {
+                    g.symbol
+                };
+                if let Some(last) = line.last_mut().filter(|s| s.style == g.style) {
+                    last.content.to_mut().push_str(symbol);
+                } else {
+                    line.push(Span::styled(symbol.to_string(), g.style));
                 }
-                lines.push(std::mem::take(&mut line));
-                used = 0;
             }
-            // Only possible in a one-column code area; still make progress.
-            if w > width {
-                text.push('\u{fffd}');
-                used += 1;
-            } else {
-                text.push_str(symbol);
-                used += w;
-            }
-        }
-        if !text.is_empty() {
-            line.push(Span::styled(text, span.style));
-        }
-    }
-    lines.push(line);
-    lines
+            line
+        })
+        .collect()
 }
 
 fn crop(spans: &[Span<'static>], left: usize, width: usize) -> (Vec<Span<'static>>, bool) {
@@ -605,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_wrap_preserves_whitespace_graphemes_and_styles() {
+    fn wrap_preserves_whitespace_graphemes_and_styles() {
         let style = Style::default().fg(t::PINK).add_modifier(Modifier::BOLD);
         let spans = vec![Span::raw("  ab"), Span::styled("界e\u{301} 界", style)];
         let lines = wrap_spans(&spans, 4);
@@ -619,6 +624,46 @@ mod tests {
         assert_eq!(wrap_spans(&[], 4).len(), 1);
         assert_eq!(wrap_spans(&[Span::raw("abcd")], 4).len(), 1);
         assert_eq!(wrap_spans(&[Span::raw("界")], 1)[0][0].content, "\u{fffd}");
+    }
+
+    #[test]
+    fn word_wrap_crosses_style_boundaries_without_splitting_words() {
+        let style = Style::default().fg(t::PINK);
+        let spans = vec![
+            Span::raw("one t"),
+            Span::styled("wo thr", style),
+            Span::raw("ee"),
+        ];
+        let lines = wrap_spans(&spans, 9);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| line.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(text, ["one two ", "three"]);
+        assert_eq!(lines[0], [Span::raw("one t"), Span::styled("wo ", style)]);
+        assert_eq!(lines[1], [Span::styled("thr", style), Span::raw("ee")]);
+        let lines = wrap_spans(&[Span::raw("one e\u{301}界 end")], 7);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| line.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(text, ["one ", "e\u{301}界 end"]);
+    }
+
+    #[test]
+    fn wrapped_diff_uses_word_boundaries_for_screen_rows() {
+        let mut app = wrapping_app("one two three four five six seven eight");
+        app.wrap = true;
+        app.views[0].row = 1;
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
+        terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
+        assert_eq!(app.views[0].row_starts, [0, 1, 3, 4]);
+        let buffer = terminal.backend().buffer();
+        let text: String = (17..49).map(|x| buffer[(x, 2)].symbol()).collect();
+        assert_eq!(text.trim_end(), "one two three four five six");
+        let text: String = (17..49).map(|x| buffer[(x, 3)].symbol()).collect();
+        assert_eq!(text.trim_end(), "seven eight");
     }
 
     #[test]
