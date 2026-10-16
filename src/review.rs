@@ -65,6 +65,11 @@ impl Anchor {
         })
     }
 
+    pub fn suggestion(&self) -> String {
+        let fence = code_fence(&self.excerpt);
+        format!("{fence}suggestion\n{}\n{fence}", self.excerpt)
+    }
+
     pub fn heading(&self) -> String {
         let Some(path) = &self.path else {
             return "General review comment".into();
@@ -119,15 +124,7 @@ pub fn markdown(snapshot: &Snapshot, comments: &[Comment], stale: bool) -> Strin
             c.body.trim()
         ));
         if !c.anchor.excerpt.is_empty() {
-            // Code can itself contain Markdown fences; choose a longer fence.
-            let longest = c
-                .anchor
-                .excerpt
-                .split(|c| c != '`')
-                .map(str::len)
-                .max()
-                .unwrap_or(0);
-            let fence = "`".repeat(3.max(longest + 1));
+            let fence = code_fence(&c.anchor.excerpt);
             s.push_str(&format!(
                 "\nReviewed code:\n{fence}\n{}\n{fence}\n",
                 c.anchor.excerpt
@@ -135,6 +132,12 @@ pub fn markdown(snapshot: &Snapshot, comments: &[Comment], stale: bool) -> Strin
         }
     }
     s
+}
+
+// Code can itself contain Markdown fences; choose a longer fence.
+fn code_fence(code: &str) -> String {
+    let longest = code.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    "`".repeat(3.max(longest + 1))
 }
 
 #[cfg(test)]
@@ -162,6 +165,26 @@ mod tests {
         assert_eq!(Anchor::lines(&f, 3, 4).unwrap().side, Some(Side::New));
         assert!(Anchor::lines(&f, 2, 3).is_err());
         assert!(Anchor::lines(&f, 0, 1).is_err());
+    }
+
+    #[test]
+    fn suggestions_preserve_source_and_use_safe_markdown_fences() {
+        for excerpt in ["", "\t界  ", "```rust\ncode\n```", "`````"] {
+            let anchor = Anchor {
+                excerpt: excerpt.into(),
+                ..Anchor::general()
+            };
+            let suggestion = anchor.suggestion();
+            let fence = suggestion
+                .lines()
+                .next()
+                .unwrap()
+                .strip_suffix("suggestion")
+                .unwrap();
+            assert!(fence.len() >= 3);
+            assert!(!excerpt.contains(fence));
+            assert_eq!(suggestion, format!("{fence}suggestion\n{excerpt}\n{fence}"));
+        }
     }
 
     #[test]

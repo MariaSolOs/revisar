@@ -243,7 +243,7 @@ impl App {
                     return Action::Send;
                 }
             }
-            KeyCode::Char('s') => {
+            KeyCode::Char('r') => {
                 self.summary = !self.summary;
                 self.summary_scroll = 0;
                 self.files_focused = false;
@@ -284,7 +284,7 @@ impl App {
                         editor: Editor::new(&c.body),
                     });
                 } else {
-                    self.message = "No comment here. s opens the comment summary.".into();
+                    self.message = "No comment here. r opens the comment summary.".into();
                 }
             }
             KeyCode::Char('d') => {
@@ -320,6 +320,23 @@ impl App {
                 } else {
                     Some(self.views[self.file].row)
                 };
+            }
+            KeyCode::Char('s') => {
+                let row = self.views[self.file].row;
+                let file = &self.snapshot.files[self.file];
+                match Anchor::lines(file, self.selection.unwrap_or(row), row) {
+                    Ok(anchor) => {
+                        let mut editor = Editor::new(&anchor.suggestion());
+                        // Start inside the block, at the first source character.
+                        editor.cursor = editor.chars.iter().position(|c| *c == '\n').unwrap() + 1;
+                        self.mode = Mode::Comment(Draft {
+                            anchor,
+                            editing: None,
+                            editor,
+                        });
+                    }
+                    Err(e) => self.message = e.to_string(),
+                }
             }
             KeyCode::Char('c') | KeyCode::Enter => {
                 let row = self.views[self.file].row;
@@ -625,11 +642,114 @@ mod tests {
         press(&mut a, 'n');
         assert_eq!(press(&mut a, 'S'), Action::Send);
         assert!(matches!(a.mode, Mode::Normal));
-        press(&mut a, 's');
+        press(&mut a, 'r');
         press(&mut a, 'd');
         press(&mut a, 'y');
         assert!(a.comments.is_empty());
     }
+    #[test]
+    fn suggestion_copies_reversed_range_and_keeps_original_anchor_when_edited() {
+        let mut a = app();
+        a.snapshot.files[0].rows =
+            crate::diff::parse_patch("@@ -1 +1,2 @@\n-old\n+\t界\n+  tail  \n").unwrap();
+        a.views[0].row = 3;
+        press(&mut a, 'v');
+        press(&mut a, 'k');
+        press(&mut a, 's');
+        let Mode::Comment(draft) = &a.mode else {
+            panic!("Expected suggestion editor");
+        };
+        assert_eq!(draft.editor.text(), "```suggestion\n\t界\n  tail  \n```");
+        assert_eq!(draft.editor.cursor, "```suggestion\n".len());
+        assert_eq!(draft.anchor.excerpt, "\t界\n  tail  ");
+        assert_eq!(draft.anchor.side, Some(Side::New));
+        assert_eq!((draft.anchor.start, draft.anchor.end), (Some(1), Some(2)));
+        a.event(Event::Paste("// replacement\n".into()));
+        a.event(Event::Key(KeyCode::Enter.into()));
+        assert_eq!(a.comments.len(), 1);
+        assert!(a.selection.is_none());
+        assert!(a.comments[0].body.contains("// replacement\n\t界"));
+        assert_eq!(a.comments[0].anchor.excerpt, "\t界\n  tail  ");
+        let feedback = crate::review::markdown(&a.snapshot, &a.comments, false);
+        assert!(feedback.contains("```suggestion\n// replacement\n\t界\n  tail  \n```"));
+        assert!(feedback.contains("Reviewed code:\n```\n\t界\n  tail  \n```"));
+        assert!(feedback.contains("(new side, working tree)"));
+        let body = a.comments[0].body.clone();
+        press(&mut a, 'r');
+        press(&mut a, 'i');
+        assert!(
+            matches!(&a.mode, Mode::Comment(d) if d.editing == Some(0) && d.editor.text() == body)
+        );
+        a.event(Event::Key(KeyCode::Esc.into()));
+        assert_eq!(a.comments[0].body, body);
+        assert_eq!(press(&mut a, 'S'), Action::Send);
+    }
+
+    #[test]
+    fn single_line_suggestions_cancel_without_changing_ordinary_comments() {
+        for (row, side, code) in [(1, Side::Old, "old"), (2, Side::New, "new")] {
+            let mut a = app();
+            a.views[0].row = row;
+            press(&mut a, 's');
+            assert!(matches!(&a.mode, Mode::Comment(d)
+                if d.anchor.side == Some(side)
+                    && d.editor.text() == format!("```suggestion\n{code}\n```")));
+            a.event(Event::Key(KeyCode::Esc.into()));
+            assert!(a.comments.is_empty());
+            press(&mut a, 'c');
+            assert!(matches!(&a.mode, Mode::Comment(d) if d.editor.text().is_empty()));
+        }
+    }
+
+    #[test]
+    fn suggestions_reject_metadata_mixed_sides_and_cross_hunk_ranges() {
+        let mut a = app();
+        a.snapshot.files[0].rows =
+            crate::diff::parse_patch("@@ -1 +1 @@\n-old\n+new\n@@ -10 +10 @@\n context\n").unwrap();
+        for (start, end) in [(0, 0), (1, 2), (2, 4)] {
+            a.selection = Some(start);
+            a.views[0].row = end;
+            press(&mut a, 's');
+            assert!(matches!(a.mode, Mode::Normal));
+            assert!(!a.message.is_empty());
+            assert_eq!(a.selection, Some(start));
+            assert!(a.comments.is_empty());
+        }
+        for (summary, files_focused) in [(true, false), (false, true)] {
+            a.summary = summary;
+            a.files_focused = files_focused;
+            press(&mut a, 's');
+            assert!(matches!(a.mode, Mode::Normal));
+        }
+    }
+
+    #[test]
+    fn summary_uses_r_and_suggestion_uses_s() {
+        let mut a = app();
+        a.views[0].row = 2;
+        press(&mut a, 'p');
+        assert!(matches!(a.mode, Mode::Normal));
+        assert!(!a.summary);
+        a.files_focused = true;
+        a.selection = Some(2);
+        a.summary_scroll = 10;
+        press(&mut a, 'r');
+        assert!(a.summary);
+        assert!(!a.files_focused);
+        assert!(a.selection.is_none());
+        assert_eq!(a.summary_scroll, 0);
+        press(&mut a, 's');
+        assert!(a.summary);
+        assert!(matches!(a.mode, Mode::Normal));
+        press(&mut a, 'r');
+        assert!(!a.summary);
+        press(&mut a, 's');
+        assert!(
+            matches!(&a.mode, Mode::Comment(d) if d.editor.text() == "```suggestion\nnew\n```")
+        );
+        assert!(!a.summary);
+    }
+
     #[test]
     fn send_without_comments_stays_in_review() {
         let mut a = app();
@@ -696,6 +816,7 @@ mod tests {
             KeyCode::Char('/'),
             KeyCode::Char('c'),
             KeyCode::Char('s'),
+            KeyCode::Char('r'),
             KeyCode::Char('}'),
             KeyCode::Tab,
             KeyCode::End,
@@ -777,7 +898,7 @@ mod tests {
             head: "".into(),
             files: vec![],
         });
-        for c in "123GjkgG{}[]vcrCSsdi/nN".chars() {
+        for c in "123GjkgG{}[]vcprCSsdi/nN".chars() {
             press(&mut a, c);
         }
     }

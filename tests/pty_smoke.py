@@ -38,9 +38,15 @@ def run(mode):
             if mode == "signal":
                 os.kill(pid, signal.SIGTERM)
             else:
-                os.write(fd, b"jc")
+                os.write(fd, b"js" if mode == "suggestion" else b"jc")
                 read_until(b"Comment:")
-                os.write(fd, b"\x1b[200~Please handle this case.\x1b[201~\r")
+                if mode == "suggestion":
+                    read_until(b"```suggestion")
+                    # Cursor starts before "before"; replace that whole source line.
+                    os.write(fd, b"\x05\x15")  # Ctrl-e, Ctrl-u
+                    os.write(fd, b"\x1b[200~suggested replacement\x1b[201~\r")
+                else:
+                    os.write(fd, b"\x1b[200~Please handle this case.\x1b[201~\r")
                 read_until(b"Comment added")
                 if mode == "stale":
                     Path(repo, "a.rs").write_text("changed during review\n")
@@ -72,7 +78,12 @@ def run(mode):
             if mode in ("cancel", "signal"):
                 assert text == b"", text
             else:
-                assert b"Please handle this case." in text, text
+                if mode == "suggestion":
+                    assert b"```suggestion\nsuggested replacement\n```" in text, text
+                    assert b"Reviewed code:\n```\nbefore\n```" in text, text
+                    assert Path(repo, "a.rs").read_text() == "after\n"
+                else:
+                    assert b"Please handle this case." in text, text
                 assert b'(old side, HEAD)' in text, text
                 assert b"\x1b" not in text, text
                 assert (b"WARNING:" in text) == (mode == "stale"), text
@@ -91,6 +102,6 @@ def run(mode):
             os.close(fd)
 
 
-for mode in ("send", "cancel", "signal", "stale"):
+for mode in ("send", "suggestion", "cancel", "signal", "stale"):
     run(mode)
     print(f"PTY {mode}: passed")

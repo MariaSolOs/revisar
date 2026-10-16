@@ -94,11 +94,11 @@ impl Ui {
             self.diff(frame, app, body[1]);
         }
         let hints = if app.summary {
-            " s/Esc diff  j/k comments  Enter jump  i edit  d delete  Ctrl-d/u scroll  S Send"
+            " r/Esc diff  j/k comments  Enter jump  i edit  d delete  Ctrl-d/u scroll  S Send"
         } else if app.selection.is_some() {
-            " RANGE  j/k extend  c comment  w wrap  Esc cancel"
+            " RANGE  j/k extend  c comment  s suggest  w wrap  Esc cancel"
         } else {
-            " j/k move  w wrap  Tab files  c comment  v range  s summary  S Send  q cancel  ? help"
+            " j/k move  w wrap  Tab files  c comment  s suggest  v range  r summary  S Send  q cancel  ? help"
         };
         frame.render_widget(
             Paragraph::new(vec![
@@ -589,7 +589,7 @@ fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hin
 
 const COMMENT_HINT: &str = "Enter/Ctrl-s: keep   Esc: discard\nShift-Enter/Ctrl-j: newline";
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Center previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n s                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Center previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n s                 Suggest replacement for line / range\n C / a             File / general comment\n r                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
@@ -1071,7 +1071,7 @@ mod tests {
             assert!(!text.contains("[ ]") && !text.contains("[x]"));
             assert!(!text.contains("reviewed"));
             let before = terminal.backend().buffer().clone();
-            navigate(&mut app, KeyCode::Char('r'), KeyModifiers::NONE);
+            navigate(&mut app, KeyCode::Char('p'), KeyModifiers::NONE);
             terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
             assert_eq!(*terminal.backend().buffer(), before);
         }
