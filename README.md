@@ -109,7 +109,7 @@ In the diff, `<number>G`, `Ctrl-d/u`, PageDown/PageUp, hunk jumps (`[`/`]`), and
 (`/`, `n`/`N`) recenter the cursor like Neovim's `zz`. `j/k` and the arrow keys keep normal
 line-by-line movement. Near the start of a file, centering stops at the first row.
 
-Press `w` to toggle diff wrapping for this session (default: nowrap). Wrapped
+Diff lines wrap by default. Press `w` to toggle wrapping for this session. Wrapped
 continuations keep their source line's highlighting and comment anchors; `j/k`
 still move by source row. Paging moves by screen rows, so even a single line
 taller than the viewport can be read in full. `h/l` and left/right scrolling are

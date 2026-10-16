@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn wrapped_diff_uses_word_boundaries_for_screen_rows() {
         let mut app = wrapping_app("one two three four five six seven eight");
-        app.wrap = true;
+        assert!(app.wrap);
         app.views[0].row = 1;
         let mut ui = Ui::default();
         let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
@@ -682,7 +682,6 @@ mod tests {
         app.selection = Some(2);
         let mut ui = Ui::default();
         let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
-        navigate(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
         terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
         assert_eq!(app.views[0].row_starts, [0, 1, 4, 5]);
         let buffer = terminal.backend().buffer();
@@ -726,7 +725,6 @@ mod tests {
         app.views[0].row = 1;
         let mut ui = Ui::default();
         let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
-        navigate(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
         terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
         for _ in 0..5 {
             navigate(&mut app, KeyCode::Char('d'), KeyModifiers::CONTROL);
@@ -768,7 +766,6 @@ mod tests {
         app.views.push(crate::app::View::default());
         let mut ui = Ui::default();
         let mut terminal = Terminal::new(TestBackend::new(50, 10)).unwrap();
-        navigate(&mut app, KeyCode::Char('w'), KeyModifiers::NONE);
         terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
         for key in "2G".chars() {
             navigate(&mut app, KeyCode::Char(key), KeyModifiers::NONE);

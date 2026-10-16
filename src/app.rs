@@ -78,7 +78,7 @@ impl App {
             files_focused: false,
             selection: None,
             summary: false,
-            wrap: false,
+            wrap: true,
             comment: 0,
             summary_scroll: 0,
             query: String::new(),
@@ -564,7 +564,12 @@ mod tests {
     #[test]
     fn wrap_toggle_is_session_wide_and_does_not_consume_editor_input() {
         let mut a = app();
+        assert!(a.wrap);
+        press(&mut a, 'l');
+        assert_eq!(a.views[0].left, 0);
+        press(&mut a, 'w');
         assert!(!a.wrap);
+        assert_eq!(a.message, "nowrap");
         press(&mut a, 'l');
         assert_eq!(a.views[0].left, 4);
         a.selection = Some(0);
