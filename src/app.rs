@@ -16,6 +16,7 @@ pub struct View {
     pub continuation: usize,
     // One-shot request, applied with the actual viewport height on the next draw.
     pub center: bool,
+    pub align_top: bool,
 }
 
 pub struct Draft {
@@ -461,7 +462,7 @@ impl App {
         if let Some((i, _)) = target {
             self.views[self.file].row = i;
             self.views[self.file].continuation = 0;
-            self.views[self.file].center = true;
+            self.views[self.file].align_top = true;
         }
     }
 

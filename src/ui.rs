@@ -260,7 +260,11 @@ impl Ui {
         } else {
             view.row
         };
-        if std::mem::take(&mut view.center) {
+        let center = std::mem::take(&mut view.center);
+        if std::mem::take(&mut view.align_top) {
+            // Like zt: keep the hunk at the top, even near EOF or after a resize.
+            view.top = cursor;
+        } else if center {
             // Like zz: allow blank space below EOF, but never scroll above BOF.
             view.top = cursor.saturating_sub(inner.height as usize / 2);
         }
@@ -589,7 +593,7 @@ fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hin
 
 const COMMENT_HINT: &str = "Enter/Ctrl-s: keep   Esc: discard\nShift-Enter/Ctrl-j: newline";
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Center previous/next hunk in this file\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n s                 Suggest replacement for line / range\n C / a             File / general comment\n r                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk at viewport top\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n s                 Suggest replacement for line / range\n C / a             File / general comment\n r                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
@@ -1206,7 +1210,7 @@ mod tests {
     }
 
     #[test]
-    fn hunk_jumps_center_in_both_directions_including_visible_and_final_hunks() {
+    fn hunk_jumps_align_top_in_both_directions_including_visible_and_final_hunks() {
         use crossterm::event::{KeyCode, KeyModifiers};
         let mut app = navigation_app();
         let mut patch = String::new();
@@ -1238,12 +1242,44 @@ mod tests {
             terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
             let view = &app.views[0];
             assert_eq!(view.row, row);
-            assert_eq!(view.top, row.saturating_sub(10));
+            assert_eq!(view.top, row);
             assert!(!view.center);
-            assert_eq!(
-                terminal.backend().buffer()[(31, 2 + (row - view.top) as u16)].symbol(),
-                ">"
+            assert!(!view.align_top);
+            assert_eq!(terminal.backend().buffer()[(31, 2)].symbol(), ">");
+        }
+    }
+
+    #[test]
+    fn hunk_top_alignment_uses_screen_rows_after_resize_and_is_one_shot() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        for wrap in [false, true] {
+            let mut app = navigation_app();
+            app.wrap = wrap;
+            let patch = format!(
+                "@@ -0,0 +1 @@\n+{}\n@@ -10,0 +12,2 @@\n+first\n+second\n",
+                "long line ".repeat(40)
             );
+            app.snapshot.files[0].rows = parse_patch(&patch).unwrap();
+            app.snapshot.files[0].patch = patch.into_bytes();
+            let mut ui = Ui::default();
+            let mut terminal = Terminal::new(TestBackend::new(120, 25)).unwrap();
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            app.views[0].continuation = 2;
+            navigate(&mut app, KeyCode::Char(']'), KeyModifiers::NONE);
+            assert_eq!(app.views[0].continuation, 0);
+            // Rebuild wrapped coordinates on the same draw that applies the jump.
+            let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            let top = if wrap { app.views[0].row_starts[2] } else { 2 };
+            assert_eq!(app.views[0].row, 2);
+            assert_eq!(app.views[0].top, top);
+            assert!(!app.views[0].align_top);
+            assert!(!app.views[0].center);
+            assert_eq!(terminal.backend().buffer()[(26, 2)].symbol(), ">");
+            navigate(&mut app, KeyCode::Char('j'), KeyModifiers::NONE);
+            terminal.draw(|frame| ui.draw(frame, &mut app)).unwrap();
+            assert_eq!(app.views[0].row, 3);
+            assert_eq!(app.views[0].top, top);
         }
     }
 

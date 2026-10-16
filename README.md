@@ -107,8 +107,9 @@ old-side fallback for deleted lines/files. If neither side shows the line, the
 cursor stays put and a message explains why. `Esc` or any other command clears
 the pending number; bare `G` still moves to the last row.
 
-In the diff, `<number>G`, `Ctrl-d/u`, PageDown/PageUp, hunk jumps (`[`/`]`), and search jumps
-(`/`, `n`/`N`) recenter the cursor like Neovim's `zz`. `j/k` and the arrow keys keep normal
+In the diff, hunk jumps (`[`/`]`) place the target hunk at the top of the viewport,
+like Neovim's `zt`. `<number>G`, `Ctrl-d/u`, PageDown/PageUp, and search jumps
+(`/`, `n`/`N`) recenter the cursor like `zz`. `j/k` and the arrow keys keep normal
 line-by-line movement. Near the start of a file, centering stops at the first row.
 
 Diff lines wrap by default. Press `w` to toggle wrapping for this session. Wrapped
