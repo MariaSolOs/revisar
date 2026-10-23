@@ -55,8 +55,12 @@ To review another folder, use `/revisar --repo ../other-project` or
 accept absolute paths, paths relative to Pi's working directory, and `~`/`~/...`.
 Quote paths containing spaces. The review covers the target's whole Git working
 tree, even when the path names a subdirectory. Without `--repo`, it uses Pi's
-current working directory as before. Feedback still goes to the same conversation
-and includes the reviewed repository's root; Pi's working directory is unchanged.
+current working directory. If Git cannot discover a repository there, it falls
+back to `~/.cfg` with `~` as the worktree, including when `.cfg` is bare. This
+fallback reviews tracked dotfiles only, never unrelated untracked home files.
+An explicit `--repo` never switches to the fallback. Feedback still goes to the
+same conversation and includes the reviewed repository's root; Pi's working
+directory is unchanged.
 
 On macOS, the launcher uses Ghostty 1.3's native AppleScript API and needs
 Automation permission to control Ghostty. The wrapper runs as the new tab's
@@ -86,7 +90,7 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | `w`                 | Toggle diff wrap / nowrap                       |
 | `Ctrl-d` / `Ctrl-u` | Half-page down / up                             |
 | `g` / `G`           | First / last row                                |
-| `<number>G`         | Jump to a source line in the current diff        |
+| `<number>G`         | Jump to a source line in the current diff       |
 | `Tab`               | Focus file sidebar / diff                       |
 | `{` / `}`           | Previous / next file                            |
 | `[` / `]`           | Previous / next hunk in the file                |
@@ -178,6 +182,9 @@ Place redirected output outside the reviewed repository so it doesn't appear
 as an untracked change. Exit codes: `0` sent, `1` error, `2` cancelled. Cancellation
 emits no feedback. With no comments, `S` does nothing; `q` closes without implying
 approval or starting an agent turn. `--help` and `--version` are the only CLI flags.
+For a separate Git directory, standard `GIT_DIR` and `GIT_WORK_TREE` environment
+variables are honored. Setting `REVISAR_TRACKED_ONLY=1` excludes untracked files;
+the Pi dotfiles fallback sets these variables only for the review process.
 
 ## Validate
 

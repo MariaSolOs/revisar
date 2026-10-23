@@ -67,7 +67,7 @@ async function readOptional(file: string): Promise<string | undefined> {
     }
 }
 
-function wrapper(root: string, dir: string): string {
+function wrapper(root: string, dir: string, gitDir?: string): string {
     // Temporary files are a one-shot transport, not saved review state. The
     // marker is renamed atomically only after stdout has been closed. The
     // terminal UI writes to /dev/tty, leaving stdout as pure feedback.
@@ -90,7 +90,7 @@ trap 'exit 2' HUP INT TERM
 printf 'started' > ${quote(path.join(dir, "started"))}
 export PATH=${quote(process.env.PATH ?? "/usr/bin:/bin")}
 cd ${quote(root)} || exit 1
-${quote(REVISAR)} > ${quote(path.join(dir, "feedback.md"))} 2> ${quote(path.join(dir, "error"))}
+${gitDir ? `GIT_DIR=${quote(gitDir)} GIT_WORK_TREE=${quote(root)} REVISAR_TRACKED_ONLY=1 ` : ""}${quote(REVISAR)} > ${quote(path.join(dir, "feedback.md"))} 2> ${quote(path.join(dir, "error"))}
 exit $?
 `;
 }
@@ -260,19 +260,58 @@ export default function revisarExtension(pi: ExtensionAPI) {
                         `Build revisar first: cd ${quote(CHECKOUT)} && cargo build --release --locked`,
                     );
                 });
-                const result = await exec(
-                    "git",
-                    ["rev-parse", "--show-toplevel"],
-                    { cwd: targetCwd, timeout: 10_000, signal },
-                );
-                const root = result.stdout.replace(/\n$/, "");
+                let root: string;
+                let gitDir: string | undefined;
+                try {
+                    const result = await exec(
+                        "git",
+                        ["rev-parse", "--show-toplevel"],
+                        { cwd: targetCwd, timeout: 10_000, signal },
+                    );
+                    root = result.stdout.replace(/\n$/, "");
+                } catch (error) {
+                    // Explicit targets never switch repositories. Only fall back
+                    // on Git's discovery failure, not missing Git or cancellation.
+                    if (
+                        repo ||
+                        signal.aborted ||
+                        (error as { code?: unknown }).code !== 128
+                    )
+                        throw error;
+                    root = os.homedir();
+                    const candidate = path.join(root, ".cfg");
+                    if (
+                        !(
+                            await stat(candidate).catch(() => undefined)
+                        )?.isDirectory()
+                    )
+                        throw error;
+                    // Supplying both paths supports a truly bare repository too.
+                    await exec(
+                        "git",
+                        [
+                            `--git-dir=${candidate}`,
+                            `--work-tree=${root}`,
+                            "rev-parse",
+                            "--show-toplevel",
+                        ],
+                        { cwd: root, timeout: 10_000, signal },
+                    );
+                    gitDir = candidate;
+                    ctx.ui.notify(
+                        `Using dotfiles repository: ${gitDir}`,
+                        "info",
+                    );
+                }
                 signal.throwIfAborted();
                 const dir = await mkdtemp(
                     path.join(os.tmpdir(), "pi-revisar-"),
                 );
                 review.dir = dir;
                 const script = path.join(dir, "run.sh");
-                await writeFile(script, wrapper(root, dir), { mode: 0o700 });
+                await writeFile(script, wrapper(root, dir, gitDir), {
+                    mode: 0o700,
+                });
                 signal.throwIfAborted();
                 ctx.ui.setStatus("revisar", "Opening revisar in Ghostty...");
                 tabId = await openGhostty(script);

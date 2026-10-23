@@ -116,6 +116,15 @@ fn paths(bytes: &[u8]) -> Result<BTreeSet<String>> {
 
 impl Snapshot {
     pub fn load(cwd: &Path) -> Result<Self> {
+        // The Pi dotfiles fallback reviews a home worktree: never enumerate its
+        // unrelated untracked files. Keep this mode for send-time reloads too.
+        Self::load_with_untracked(
+            cwd,
+            std::env::var_os("REVISAR_TRACKED_ONLY").as_deref() != Some(std::ffi::OsStr::new("1")),
+        )
+    }
+
+    fn load_with_untracked(cwd: &Path, include_untracked: bool) -> Result<Self> {
         let root = git(cwd, &["rev-parse", "--show-toplevel"], &[0])?;
         // Strip only Git's terminating LF, not whitespace belonging to the path.
         let root = root.strip_suffix(b"\n").unwrap_or(&root);
@@ -131,11 +140,15 @@ impl Snapshot {
         )?)?
         .trim()
         .to_string();
-        let untracked = paths(&git(
-            &root,
-            &["ls-files", "--others", "--exclude-standard", "-z"],
-            &[0],
-        )?)?;
+        let untracked = if include_untracked {
+            paths(&git(
+                &root,
+                &["ls-files", "--others", "--exclude-standard", "-z"],
+                &[0],
+            )?)?
+        } else {
+            BTreeSet::new()
+        };
         let tracked = if head.is_empty() {
             paths(&git(&root, &["ls-files", "--cached", "-z"], &[0])?)?
         } else {
@@ -310,6 +323,30 @@ pub fn display_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracked_only_omits_untracked_files() {
+        let dir = tempfile::Builder::new()
+            .prefix("tracked-only-")
+            .tempdir_in("target")
+            .unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("tracked"), "config\n").unwrap();
+        std::fs::write(dir.path().join("private"), "unrelated\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("tracked")).unwrap();
+        index.write().unwrap();
+        let snapshot = Snapshot::load_with_untracked(dir.path(), false).unwrap();
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].path, "tracked");
+        assert_eq!(
+            Snapshot::load_with_untracked(dir.path(), true)
+                .unwrap()
+                .files
+                .len(),
+            2
+        );
+    }
 
     #[test]
     fn hunk_coordinates_and_header_like_content() {

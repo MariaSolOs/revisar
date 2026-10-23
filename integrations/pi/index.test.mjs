@@ -32,9 +32,22 @@ execFile[promisify.custom] = (file, args, options) => {
     const finished = new Promise((resolve) => stdin.on("finish", resolve));
     const pending = (async () => {
         if (file === "git") {
+            if (args[0].startsWith("--git-dir=")) {
+                assert.deepEqual(args, [
+                    `--git-dir=${os.homedir()}/.cfg`,
+                    `--work-tree=${os.homedir()}`,
+                    "rev-parse",
+                    "--show-toplevel",
+                ]);
+                scenario.dotfiles = true;
+                return { stdout: `${os.homedir()}\n`, stderr: "" };
+            }
             assert.deepEqual(args, ["rev-parse", "--show-toplevel"]);
             scenario.gitCwd = options.cwd;
-            if (scenario.gitError) throw new Error("not a git repository");
+            if (scenario.gitError)
+                throw Object.assign(new Error("not a git repository"), {
+                    code: 128,
+                });
             return { stdout: `${scenario.root}\n`, stderr: "" };
         }
         if (file.endsWith("osascript")) {
@@ -104,7 +117,13 @@ async function setup(t, options = {}) {
         ...options,
     };
     const current = scenario;
+    const previousHome = process.env.HOME;
+    const home = path.join(root, "home");
+    await mkdir(home);
+    process.env.HOME = home;
     t.after(async () => {
+        if (previousHome === undefined) delete process.env.HOME;
+        else process.env.HOME = previousHome;
         await rm(root, { recursive: true, force: true });
         if (current.dir)
             await rm(current.dir, { recursive: true, force: true });
@@ -320,6 +339,32 @@ test("missing paths, files, and non-repositories do not launch", async (t) => {
     scenario.gitError = false;
     await h.run();
     assert.equal(h.sent.length, 1);
+});
+
+test("dotfiles discovery passes bare-repo context and tracked-only mode into the real wrapper", async (t) => {
+    const h = await setup(t, {
+        gitError: true,
+        program:
+            'printf "%s\\n%s\\n%s\\n" "$GIT_DIR" "$GIT_WORK_TREE" "$REVISAR_TRACKED_ONLY"\n',
+    });
+    await mkdir(path.join(os.homedir(), ".cfg"));
+    await h.run();
+    assert.equal(scenario.dotfiles, true);
+    assert.deepEqual(h.sent, [
+        {
+            text: `${os.homedir()}/.cfg\n${os.homedir()}\n1`,
+            options: { deliverAs: "followUp" },
+        },
+    ]);
+    assert.ok(
+        h.notifications.some((text) =>
+            text.includes("Using dotfiles repository"),
+        ),
+    );
+    scenario.dotfiles = false;
+    await h.run("--repo .");
+    assert.equal(scenario.dotfiles, false);
+    assert.match(h.notifications.at(-1), /not a git repository/);
 });
 
 test("busy agent and unexpected arguments do not launch", async (t) => {
