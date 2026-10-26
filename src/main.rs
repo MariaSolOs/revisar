@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use crossterm::{
-    cursor::Show,
+    cursor::{SetCursorStyle, Show},
     event::{
         self, DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
@@ -12,6 +12,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use revisar::{
     app::{Action, App, Confirmation, Mode},
     diff::Snapshot,
+    editor::VimMode,
     review::markdown,
     ui::Ui,
 };
@@ -35,6 +36,7 @@ fn restore() {
             PopKeyboardEnhancementFlags,
             DisableBracketedPaste,
             LeaveAlternateScreen,
+            SetCursorStyle::DefaultUserShape,
             Show
         );
     }
@@ -106,11 +108,23 @@ fn run() -> Result<u8> {
         hook(info);
     }));
     let mut screen = Screen::open()?;
+    let mut block_cursor = false;
     let stale = loop {
         if terminated.load(Ordering::Relaxed) {
             return Ok(2);
         }
         screen.0.draw(|frame| ui.draw(frame, &mut app))?;
+        // Vim-style caret: block in Normal mode, the user's own shape otherwise.
+        let block = matches!(&app.mode, Mode::Comment(d) if d.editor.mode == VimMode::Normal);
+        if block != block_cursor {
+            block_cursor = block;
+            let style = if block {
+                SetCursorStyle::SteadyBlock
+            } else {
+                SetCursorStyle::DefaultUserShape
+            };
+            execute!(screen.0.backend_mut(), style)?;
+        }
         if !event::poll(Duration::from_millis(100))? {
             continue;
         }

@@ -1,7 +1,7 @@
 use crate::{
     app::{App, Confirmation, Mode},
     diff::{Kind, Row, display_text},
-    editor::Editor,
+    editor::{Editor, VimMode},
     theme::{self as t, Syntax},
     wrap::word_ranges,
 };
@@ -112,7 +112,13 @@ impl Ui {
             Mode::Comment(draft) => {
                 let title = format!(" Comment: {} ", draft.anchor.heading());
                 let area = comment_layout(frame.area(), &draft.editor);
-                editor_popup(frame, area, &title, &draft.editor, COMMENT_HINT);
+                editor_popup(
+                    frame,
+                    area,
+                    &title,
+                    &draft.editor,
+                    comment_hint(&draft.editor),
+                );
             }
             Mode::Search(editor) => editor_popup(
                 frame,
@@ -552,7 +558,7 @@ fn comment_layout(area: Rect, editor: &Editor) -> Rect {
     let width = 64.min(area.width.saturating_sub(2));
     let inner_width = width.saturating_sub(2);
     let (lines, _, _) = editor.layout(inner_width as usize);
-    let hint_height = Paragraph::new(COMMENT_HINT)
+    let hint_height = Paragraph::new(comment_hint(editor))
         .wrap(Wrap { trim: false })
         .line_count(inner_width);
     let height = (lines.len().clamp(3, 10) + hint_height + 2)
@@ -591,9 +597,18 @@ fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hin
     frame.set_cursor_position((sections[0].x + x as u16, sections[0].y + (y - top) as u16));
 }
 
-const COMMENT_HINT: &str = "Enter/Ctrl-s: keep   Esc: discard\nShift-Enter/Ctrl-j: newline";
+const INSERT_HINT: &str = "-- INSERT --  Ctrl-s: keep  Esc: normal\nEnter/Ctrl-j: newline";
+const NORMAL_HINT: &str =
+    "-- NORMAL --  Enter: keep  Esc: discard\nhjkl w b 0 $  i a o O  x u  d/c+motion";
+
+fn comment_hint(editor: &Editor) -> &'static str {
+    match editor.mode {
+        VimMode::Insert => INSERT_HINT,
+        VimMode::Normal => NORMAL_HINT,
+    }
+}
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk at viewport top\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n s                 Suggest replacement for line / range\n C / a             File / general comment\n r                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Enter or Ctrl-s   Keep comment in memory\n Shift-Enter / Ctrl-j   Newline while editing\n Esc               Cancel edit / selection / search\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk at viewport top\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n s                 Suggest replacement for line / range\n C / a             File / general comment\n r                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Esc               Cancel selection / search\n\nCOMMENT EDITOR (VIM)\n                   Comments open in Insert, suggestions in Normal\n Ctrl-s            Keep comment in memory (any mode)\n Enter             Insert: newline; Normal: keep comment\n Esc               Insert: Normal mode; Normal: discard edit\n h/j/k/l w/b 0/$   Move; d/c + motion deletes / changes\n i/a o/O           Insert before/after; open line below/above\n x / u / dd / cc   Delete char / undo / delete, change line\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {
@@ -744,6 +759,7 @@ mod tests {
         };
         assert_eq!(draft.anchor.start, Some(1));
         assert_eq!(draft.anchor.excerpt, text);
+        navigate(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         navigate(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         let mut terminal = Terminal::new(TestBackend::new(82, 10)).unwrap();
         terminal.draw(|f| ui.diff(f, &mut app, f.area())).unwrap();
@@ -1024,27 +1040,39 @@ mod tests {
 
     #[test]
     fn compact_comment_dialog_keeps_cursor_and_hints_visible() {
-        let mut editor = Editor::new(&format!("{}\nLast line", "界 comment\n".repeat(30)));
-        for (width, height) in [(45, 12), (60, 20), (120, 40)] {
-            for cursor in [0, editor.chars.len() / 2, editor.chars.len()] {
-                editor.cursor = cursor;
-                let area = Rect::new(0, 0, width, height);
-                let popup = comment_layout(area, &editor);
-                assert!(popup.width <= width - 2 && popup.height <= height - 2);
-                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-                terminal
-                    .draw(|frame| editor_popup(frame, popup, " Comment ", &editor, COMMENT_HINT))
-                    .unwrap();
-                let cursor = terminal.get_cursor_position().unwrap();
-                // Borders and the two hint rows are outside the editing area.
-                assert!(cursor.x > popup.x && cursor.x < popup.right() - 1);
-                assert!(cursor.y > popup.y && cursor.y < popup.bottom() - 3);
-                let buffer = terminal.backend().buffer();
-                let text: String = (0..height)
-                    .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
-                    .collect();
-                assert!(text.contains("Enter/Ctrl-s: keep   Esc: discard"));
-                assert!(text.contains("Shift-Enter/Ctrl-j: newline"));
+        let text = format!("{}\nLast line", "界 comment\n".repeat(30));
+        for (mut editor, hints) in [
+            (
+                Editor::new(&text),
+                ["-- INSERT --  Ctrl-s: keep", "Enter/Ctrl-j: newline"],
+            ),
+            (
+                Editor::normal(&text, 0),
+                ["-- NORMAL --  Enter: keep", "x u  d/c+motion"],
+            ),
+        ] {
+            for (width, height) in [(45, 12), (60, 20), (120, 40)] {
+                for cursor in [0, editor.chars.len() / 2, editor.chars.len()] {
+                    editor.cursor = cursor;
+                    let area = Rect::new(0, 0, width, height);
+                    let popup = comment_layout(area, &editor);
+                    assert!(popup.width <= width - 2 && popup.height <= height - 2);
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal
+                        .draw(|frame| {
+                            editor_popup(frame, popup, " Comment ", &editor, comment_hint(&editor))
+                        })
+                        .unwrap();
+                    let cursor = terminal.get_cursor_position().unwrap();
+                    // Borders and the two hint rows are outside the editing area.
+                    assert!(cursor.x > popup.x && cursor.x < popup.right() - 1);
+                    assert!(cursor.y > popup.y && cursor.y < popup.bottom() - 3);
+                    let buffer = terminal.backend().buffer();
+                    let text: String = (0..height)
+                        .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))
+                        .collect();
+                    assert!(hints.iter().all(|hint| text.contains(hint)));
+                }
             }
         }
     }

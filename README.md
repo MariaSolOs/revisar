@@ -125,16 +125,29 @@ The diff title shows `wrap` or `nowrap`. Comment editors and summaries always wr
 
 Press `s` on a source line, or select a range with `v` and movement then press
 `s`, to open a comment prefilled with the selected code in a `suggestion` block.
-The cursor starts at the first code character. Edit the block to show your
+The editor opens in Vim Normal mode with the cursor on the first code character. Edit the block to show your
 replacement; you can add an explanation outside it. Ranges must stay within one
 hunk and one side, just like comments. Suggestions on deleted lines refer to the
 old HEAD code. The original excerpt and coordinates remain attached, and `i`
 reopens the full suggestion for editing. `S` sends it to the agent as review
 feedback; revisar never applies the replacement or changes files itself.
 
-In the comment editor, `Enter` or `Ctrl-s` keeps the comment **in memory**;
-`Shift-Enter` or `Ctrl-j` inserts a newline; `Esc` discards that edit. Arrow keys,
-Home/End, `Ctrl-a/e`, `Ctrl-w`, `Ctrl-u`, and bracketed paste are supported.
+The comment editor is a small modal Vim editor. Comments (and `i` edits) open in
+Insert mode; suggestions open in Normal mode. The status line shows `-- INSERT --`
+or `-- NORMAL --`, and the terminal caret is a block in Normal mode.
+
+- `Ctrl-s` keeps the comment **in memory** from either mode; `Ctrl-c` discards.
+- Insert: `Enter`, `Shift-Enter`, or `Ctrl-j` inserts a newline; `Esc` returns to
+  Normal. Arrow keys, Home/End, `Ctrl-a/e`, `Ctrl-w`, and `Ctrl-u` work as before.
+- Normal: `Enter` keeps the comment; `Esc` discards the edit (or cancels a
+  pending operator). Supported commands: `h/j/k/l` and arrows, `w`/`b`, `0`/`$`,
+  `i`/`a`/`o`/`O`, `x`, and `u` (undo each command or Insert session).
+- Operators: `d` (delete) and `c` (change: delete, then Insert) take any of
+  those motions, plus `dd`/`cc` for the current line. `dj`/`dk` are linewise;
+  `dw` stops at the line end and `cw` keeps the blank after a word, as in Vim.
+  A `c` change and the text typed after it undo together.
+  There are no counts, registers, visual mode, or `:` commands.
+- Bracketed paste inserts at the cursor in either mode.
 In the summary, `Ctrl-d/u` scrolls the full selected comment and code excerpt.
 
 ## Scope and boundaries

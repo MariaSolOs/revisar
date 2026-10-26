@@ -42,11 +42,11 @@ def run(mode):
                 read_until(b"Comment:")
                 if mode == "suggestion":
                     read_until(b"```suggestion")
-                    # Cursor starts before "before"; replace that whole source line.
-                    os.write(fd, b"\x05\x15")  # Ctrl-e, Ctrl-u
-                    os.write(fd, b"\x1b[200~suggested replacement\x1b[201~\r")
+                    # Normal mode on "before": delete it, open a line, paste.
+                    os.write(fd, b"ddO\x1b[200~suggested replacement\x1b[201~\x13")  # Ctrl-s
                 else:
-                    os.write(fd, b"\x1b[200~Please handle this case.\x1b[201~\r")
+                    # Insert mode: Enter is a newline; Ctrl-s keeps the comment.
+                    os.write(fd, b"\x1b[200~Please handle\x1b[201~\r this case.\x13")
                 read_until(b"Comment added")
                 if mode == "stale":
                     Path(repo, "a.rs").write_text("changed during review\n")
@@ -83,7 +83,7 @@ def run(mode):
                     assert b"Reviewed code:\n```\nbefore\n```" in text, text
                     assert Path(repo, "a.rs").read_text() == "after\n"
                 else:
-                    assert b"Please handle this case." in text, text
+                    assert b"Please handle\n this case." in text, text
                 assert b'(old side, HEAD)' in text, text
                 assert b"\x1b" not in text, text
                 assert (b"WARNING:" in text) == (mode == "stale"), text

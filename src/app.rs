@@ -1,6 +1,6 @@
 use crate::{
     diff::{Kind, Snapshot},
-    editor::Editor,
+    editor::{Editor, VimMode},
     review::{Anchor, Comment, Side},
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -93,7 +93,7 @@ impl App {
     pub fn event(&mut self, event: Event) -> Action {
         match event {
             Event::Paste(text) => match &mut self.mode {
-                Mode::Comment(d) => d.editor.insert(&text),
+                Mode::Comment(d) => d.editor.paste(&text),
                 Mode::Search(e) => e.insert(&text.replace(['\r', '\n'], " ")),
                 _ => (),
             },
@@ -107,10 +107,16 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match &mut self.mode {
             Mode::Comment(draft) => {
-                if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+                let normal = draft.editor.mode == VimMode::Normal;
+                if key.code == KeyCode::Esc {
+                    // Esc leaves Insert mode or a pending operator before discarding.
+                    if !draft.editor.escape() {
+                        self.mode = Mode::Normal;
+                    }
+                } else if ctrl && key.code == KeyCode::Char('c') {
                     self.mode = Mode::Normal;
                 } else if (ctrl && key.code == KeyCode::Char('s'))
-                    || (key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT))
+                    || (normal && key.code == KeyCode::Enter)
                 {
                     let body = draft.editor.text().trim().to_string();
                     if body.is_empty() {
@@ -131,7 +137,7 @@ impl App {
                         self.message = "Comment added to this review. S sends all feedback.".into();
                     }
                 } else {
-                    draft.editor.input(key);
+                    draft.editor.vim(key);
                 }
                 return Action::Continue;
             }
@@ -327,9 +333,12 @@ impl App {
                 let file = &self.snapshot.files[self.file];
                 match Anchor::lines(file, self.selection.unwrap_or(row), row) {
                     Ok(anchor) => {
-                        let mut editor = Editor::new(&anchor.suggestion());
-                        // Start inside the block, at the first source character.
-                        editor.cursor = editor.chars.iter().position(|c| *c == '\n').unwrap() + 1;
+                        let text = anchor.suggestion();
+                        // Start in Normal mode inside the block, at the first source character.
+                        let editor = Editor::normal(
+                            &text,
+                            text.chars().position(|c| c == '\n').unwrap() + 1,
+                        );
                         self.mode = Mode::Comment(Draft {
                             anchor,
                             editing: None,
@@ -612,7 +621,10 @@ mod tests {
         press(&mut a, 'a');
         press(&mut a, 'w');
         assert!(matches!(&a.mode, Mode::Comment(draft) if draft.editor.text() == "w"));
+        // Insert -> Normal -> discard.
         a.event(Event::Key(KeyCode::Esc.into()));
+        a.event(Event::Key(KeyCode::Esc.into()));
+        assert!(matches!(a.mode, Mode::Normal));
         press(&mut a, '?');
         press(&mut a, 'w');
         assert!(a.wrap);
@@ -636,8 +648,28 @@ mod tests {
         press(&mut a, 'j');
         press(&mut a, 'c');
         a.event(Event::Paste("Please fix".into()));
+        // Enter is a newline in Insert mode and keeps the comment in Normal mode.
+        a.event(Event::Key(KeyCode::Enter.into()));
+        assert!(a.comments.is_empty());
+        a.event(Event::Key(KeyCode::Esc.into()));
         a.event(Event::Key(KeyCode::Enter.into()));
         assert_eq!(a.comments.len(), 1);
+        assert_eq!(a.comments[0].body, "Please fix");
+        press(&mut a, 'a');
+        a.event(Event::Paste("Ctrl-s".into()));
+        a.event(Event::Key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL,
+        )));
+        assert_eq!(a.comments.len(), 2);
+        press(&mut a, 'a');
+        a.event(Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(matches!(a.mode, Mode::Normal));
+        a.comments.truncate(1);
+        a.comment = 0;
         assert_eq!(press(&mut a, 'q'), Action::Continue);
         assert!(matches!(a.mode, Mode::Confirm(Confirmation::Discard)));
         press(&mut a, 'n');
@@ -662,6 +694,7 @@ mod tests {
         };
         assert_eq!(draft.editor.text(), "```suggestion\n\t界\n  tail  \n```");
         assert_eq!(draft.editor.cursor, "```suggestion\n".len());
+        assert_eq!(draft.editor.mode, VimMode::Normal);
         assert_eq!(draft.anchor.excerpt, "\t界\n  tail  ");
         assert_eq!(draft.anchor.side, Some(Side::New));
         assert_eq!((draft.anchor.start, draft.anchor.end), (Some(1), Some(2)));
@@ -681,6 +714,7 @@ mod tests {
         assert!(
             matches!(&a.mode, Mode::Comment(d) if d.editing == Some(0) && d.editor.text() == body)
         );
+        a.event(Event::Key(KeyCode::Esc.into()));
         a.event(Event::Key(KeyCode::Esc.into()));
         assert_eq!(a.comments[0].body, body);
         assert_eq!(press(&mut a, 'S'), Action::Send);
@@ -860,6 +894,7 @@ mod tests {
         press(&mut a, 'a');
         press(&mut a, '2');
         assert!(matches!(&a.mode, Mode::Comment(draft) if draft.editor.text() == "2"));
+        a.event(Event::Key(KeyCode::Esc.into()));
         a.event(Event::Key(KeyCode::Esc.into()));
         press(&mut a, 'v');
         for key in "1G".chars() {
