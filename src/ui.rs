@@ -555,13 +555,13 @@ fn confirmation_layout<'a>(area: Rect, title: &str, text: &'a str) -> (Rect, Par
 fn comment_layout(area: Rect, editor: &Editor) -> Rect {
     // Keep the width steady while typing; grow only as wrapped content needs
     // more rows. Longer comments scroll within a bounded editing area.
-    let width = 64.min(area.width.saturating_sub(2));
+    let width = 77.min(area.width.saturating_sub(2));
     let inner_width = width.saturating_sub(2);
     let (lines, _, _) = editor.layout(inner_width as usize);
     let hint_height = Paragraph::new(comment_hint(editor))
         .wrap(Wrap { trim: false })
         .line_count(inner_width);
-    let height = (lines.len().clamp(3, 10) + hint_height + 2)
+    let height = (lines.len().clamp(4, 12) + hint_height + 2)
         .min(area.height.saturating_sub(2) as usize) as u16;
     Rect::new(
         area.x + (area.width - width) / 2,
@@ -1025,7 +1025,7 @@ mod tests {
         for area in [Rect::new(0, 0, 120, 40), Rect::new(5, 3, 200, 80)] {
             for text in ["", "A short comment"] {
                 let popup = comment_layout(area, &Editor::new(text));
-                assert_eq!((popup.width, popup.height), (64, 7));
+                assert_eq!((popup.width, popup.height), (77, 8));
                 assert_eq!(popup.x, area.x + (area.width - popup.width) / 2);
                 assert_eq!(popup.y, area.y + (area.height - popup.height) / 2);
             }
@@ -1034,7 +1034,7 @@ mod tests {
             let wrapped = Editor::new(&"界".repeat(100));
             assert_eq!(comment_layout(area, &wrapped).height, 8);
             let long = Editor::new(&"line\n".repeat(30));
-            assert_eq!(comment_layout(area, &long).height, 14);
+            assert_eq!(comment_layout(area, &long).height, 16);
         }
     }
 
