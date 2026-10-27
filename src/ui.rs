@@ -174,17 +174,21 @@ impl Ui {
                     .iter()
                     .filter(|c| c.anchor.path.as_deref() == Some(&f.path))
                     .count();
+                let suffix = if comments > 0 {
+                    format!(" ({comments})")
+                } else {
+                    String::new()
+                };
+                // Borders, highlight symbol, status prefix, and one trailing
+                // space before the border; keep the end of long paths (the
+                // file name) visible by eliding the start.
+                let available = (area.width as usize)
+                    .saturating_sub(2 + 1 + 2 + 1)
+                    .saturating_sub(suffix.width());
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", f.status), Style::default().fg(color)),
-                    Span::raw(display_text(&f.path)),
-                    Span::styled(
-                        if comments > 0 {
-                            format!(" ({comments})")
-                        } else {
-                            String::new()
-                        },
-                        Style::default().fg(t::CYAN),
-                    ),
+                    Span::raw(truncate_start(&display_text(&f.path), available)),
+                    Span::styled(suffix, Style::default().fg(t::CYAN)),
                 ]))
             })
             .collect();
@@ -479,6 +483,27 @@ fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> 
         .collect()
 }
 
+/// Fits `s` into `width` columns by replacing its start with an ellipsis.
+fn truncate_start(s: &str, width: usize) -> String {
+    if s.width() <= width {
+        return s.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut used = 1;
+    let mut start = s.len();
+    for (i, c) in s.char_indices().rev() {
+        let w = c.width().unwrap_or(0);
+        if used + w > width {
+            break;
+        }
+        used += w;
+        start = i;
+    }
+    format!("…{}", &s[start..])
+}
+
 fn crop(spans: &[Span<'static>], left: usize, width: usize) -> (Vec<Span<'static>>, bool) {
     let mut x = 0;
     let mut result = Vec::new();
@@ -628,6 +653,31 @@ mod tests {
                 rows: parse_patch(&format!("@@ -0,0 +1,2 @@\n+{text}\n+next\n")).unwrap(),
             }],
         })
+    }
+
+    #[test]
+    fn long_file_paths_keep_their_end_visible() {
+        assert_eq!(truncate_start("src/app.rs", 10), "src/app.rs");
+        assert_eq!(truncate_start("src/app.rs", 7), "\u{2026}app.rs");
+        assert_eq!(truncate_start("a/\u{754c}\u{754c}", 4), "\u{2026}\u{754c}");
+        assert_eq!(truncate_start("abc", 0), "");
+
+        let mut app = wrapping_app("x");
+        app.snapshot.files[0].path = "very/long/directory/structure/final_name.rs".into();
+        let (width, height) = (100, 12);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut ui = Ui::default();
+        terminal.draw(|f| ui.draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let sidebar = (width / 4).clamp(22, 38);
+        let rows: Vec<String> = (0..height)
+            .map(|y| (0..sidebar).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("\u{2026}") && r.ends_with("final_name.rs \u{2502}")),
+            "{rows:#?}"
+        );
     }
 
     #[test]
