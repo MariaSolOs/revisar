@@ -70,7 +70,8 @@ impl Ui {
         ])
         .split(area);
         let header = format!(
-            " revisar  |  working tree  |  {} files  |  {} comments",
+            " revisar  |  {}  |  {} files  |  {} comments",
+            app.snapshot.label(),
             app.snapshot.files.len(),
             app.comments.len()
         );
@@ -217,7 +218,7 @@ impl Ui {
         app.height = inner.height as usize;
         let Some(file) = app.snapshot.files.get(app.file) else {
             frame.render_widget(
-                Paragraph::new("No working-tree changes.\n\na: general comment   q: close")
+                Paragraph::new("No changes.\n\na: general comment   q: close")
                     .style(Style::default().fg(t::MUTED)),
                 inner,
             );
@@ -618,7 +619,8 @@ mod tests {
     fn wrapping_app(text: &str) -> App {
         App::new(Snapshot {
             root: "/repo".into(),
-            head: "abc".into(),
+            base: "abc".into(),
+            target: None,
             files: vec![FileDiff {
                 path: "file.txt".into(),
                 status: 'A',
@@ -837,7 +839,8 @@ mod tests {
         };
         let mut app = App::new(Snapshot {
             root: "/repo".into(),
-            head: "abc".into(),
+            base: "abc".into(),
+            target: None,
             files: vec![file],
         });
         let mut ui = Ui::default();
@@ -949,7 +952,8 @@ mod tests {
     fn help_wraps_and_scrolls_on_small_terminals_then_resets_on_resize() {
         let mut app = App::new(Snapshot {
             root: "/repo".into(),
-            head: "abc".into(),
+            base: "abc".into(),
+            target: None,
             files: vec![],
         });
         let mut ui = Ui::default();
@@ -995,7 +999,8 @@ mod tests {
     fn every_confirmation_keeps_its_choices_visible_on_small_terminals() {
         let mut app = App::new(Snapshot {
             root: "/repo".into(),
-            head: "abc".into(),
+            base: "abc".into(),
+            target: None,
             files: vec![],
         });
         let mut ui = Ui::default();
@@ -1135,7 +1140,8 @@ mod tests {
             .collect();
         App::new(Snapshot {
             root: "/repo".into(),
-            head: "abc".into(),
+            base: "abc".into(),
+            target: None,
             files,
         })
     }
@@ -1342,7 +1348,8 @@ mod tests {
     fn render_diff_summary_editor_and_small_terminal() {
         let mut a = App::new(Snapshot {
             root: "/repo".into(),
-            head: "abc".into(),
+            base: "abc".into(),
+            target: None,
             files: vec![FileDiff {
                 path: "src/main.rs".into(),
                 status: 'A',

@@ -573,7 +573,8 @@ mod tests {
     fn app() -> App {
         App::new(Snapshot {
             root: "/repo".into(),
-            head: "abc".into(),
+            base: "abc".into(),
+            target: None,
             files: vec![crate::diff::FileDiff {
                 path: "a.rs".into(),
                 status: 'M',
@@ -931,7 +932,8 @@ mod tests {
         assert_eq!(a.views[0].row, 2);
         let mut a = App::new(Snapshot {
             root: "/repo".into(),
-            head: "".into(),
+            base: "".into(),
+            target: None,
             files: vec![],
         });
         for c in "123GjkgG{}[]vcprCSsdi/nN".chars() {

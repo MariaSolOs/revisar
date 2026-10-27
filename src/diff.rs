@@ -51,7 +51,11 @@ pub struct FileDiff {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub root: PathBuf,
-    pub head: String,
+    // Commit the working tree is diffed against: HEAD, or its merge base with
+    // the target branch when the current branch has diverged from it.
+    pub base: String,
+    // Short target ref (e.g. "origin/main") when base is a merge base.
+    pub target: Option<String>,
     pub files: Vec<FileDiff>,
 }
 
@@ -106,6 +110,43 @@ fn git(root: &Path, args: &[&str], allowed: &[i32]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn line(bytes: Vec<u8>) -> Result<String> {
+    Ok(String::from_utf8(bytes)?.trim().to_string())
+}
+
+// Review a branch against where it forked from the default branch, so its
+// committed changes stay visible even when the working tree is clean.
+fn branch_base(root: &Path, head: &str) -> Result<Option<(String, String)>> {
+    let mut candidates = Vec::new();
+    let origin = line(git(
+        root,
+        &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
+        &[0, 1],
+    )?)?;
+    if !origin.is_empty() {
+        candidates.push(origin);
+    }
+    candidates.extend(["refs/heads/main".into(), "refs/heads/master".into()]);
+    for full in candidates {
+        let spec = format!("{full}^{{commit}}");
+        if line(git(root, &["rev-parse", "--verify", "-q", &spec], &[0, 1])?)?.is_empty() {
+            continue;
+        }
+        // Unrelated histories have no merge base: fall back to HEAD.
+        let base = line(git(root, &["merge-base", head, &full], &[0, 1])?)?;
+        if base.is_empty() || base == head {
+            return Ok(None);
+        }
+        let short = full
+            .strip_prefix("refs/remotes/")
+            .or_else(|| full.strip_prefix("refs/heads/"))
+            .unwrap_or(&full)
+            .to_string();
+        return Ok(Some((base, short)));
+    }
+    Ok(None)
+}
+
 fn paths(bytes: &[u8]) -> Result<BTreeSet<String>> {
     bytes
         .split(|b| *b == 0)
@@ -133,13 +174,18 @@ impl Snapshot {
             git(&root, &["ls-files", "--unmerged", "-z"], &[0])?.is_empty(),
             "Resolve merge conflicts before reviewing"
         );
-        let head = String::from_utf8(git(
+        let head = line(git(
             &root,
             &["rev-parse", "--verify", "-q", "HEAD"],
             &[0, 1],
-        )?)?
-        .trim()
-        .to_string();
+        )?)?;
+        let (head, target) = match head.is_empty() {
+            true => (head, None),
+            false => match branch_base(&root, &head)? {
+                Some((base, target)) => (base, Some(target)),
+                None => (head, None),
+            },
+        };
         let untracked = if include_untracked {
             paths(&git(
                 &root,
@@ -214,7 +260,19 @@ impl Snapshot {
                 patch,
             });
         }
-        Ok(Self { root, head, files })
+        Ok(Self {
+            root,
+            base: head,
+            target,
+            files,
+        })
+    }
+
+    pub fn label(&self) -> String {
+        match &self.target {
+            Some(target) => format!("branch vs {target} + working tree"),
+            None => "working tree".into(),
+        }
     }
 
     pub fn unchanged(&self) -> Result<bool> {

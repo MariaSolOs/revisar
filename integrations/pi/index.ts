@@ -35,7 +35,7 @@ function parseRepo(args: string): string | undefined {
     );
     const repo = match?.[1] ?? match?.[2] ?? match?.[3];
     if (!repo || repo.startsWith("--")) {
-        throw new Error("Usage: /revisar [--repo <path>] (working tree only)");
+        throw new Error("Usage: /revisar [--repo <path>]");
     }
     if (repo === "~") return os.homedir();
     if (repo.startsWith("~/")) return path.join(os.homedir(), repo.slice(2));
@@ -207,7 +207,7 @@ export default function revisarExtension(pi: ExtensionAPI) {
 
     pi.registerCommand("revisar", {
         description:
-            "Review working-tree changes in a Ghostty tab. Send passes comments directly to this agent; cancel discards them. Usage: /revisar [--repo <path>]",
+            "Review working-tree and branch changes in a Ghostty tab. Send passes comments directly to this agent; cancel discards them. Usage: /revisar [--repo <path>]",
         handler: async (args, ctx) => {
             if (ctx.mode !== "tui") {
                 ctx.ui.notify(

@@ -77,7 +77,7 @@ then exits successfully so cancellation is not treated as a terminal failure.
 - The exact miss-dracula palette is fixed in `src/theme.rs`. Your syntax theme
   is embedded from `assets/miss-dracula-syntax.tmTheme`; no runtime config files.
 - Line, range, file, and general comments. Comments include source coordinates,
-  old/new side, base HEAD, and the selected code excerpt in the agent's feedback.
+  old/new side, base commit, and the selected code excerpt in the agent's feedback.
 - Suggested replacements: copy a line or range into an editable suggestion block.
 - Diff search, hunk navigation, and comment summary.
 - Before Send, revisar checks the snapshot again. Changed files require
@@ -128,7 +128,7 @@ Press `s` on a source line, or select a range with `v` and movement then press
 The editor opens in Vim Normal mode with the cursor on the first code character. Edit the block to show your
 replacement; you can add an explanation outside it. Ranges must stay within one
 hunk and one side, just like comments. Suggestions on deleted lines refer to the
-old HEAD code. The original excerpt and coordinates remain attached, and `i`
+old base code. The original excerpt and coordinates remain attached, and `i`
 reopens the full suggestion for editing. `S` sends it to the agent as review
 feedback; revisar never applies the replacement or changes files itself.
 
@@ -152,8 +152,12 @@ In the summary, `Ctrl-d/u` scrolls the full selected comment and code excerpt.
 
 ## Scope and boundaries
 
-The review is the **net working tree against HEAD**, including staged, unstaged,
-and untracked files; Git's ignore rules apply to untracked files. A staged edit
+The review is the **net working tree against a base commit**, including staged,
+unstaged, and untracked files. The base is HEAD, unless the current branch has
+diverged from the target branch (`origin/HEAD`, else local `main`, else
+`master`): then it is their merge base, so the branch's committed changes are
+reviewed even when the working tree is clean. Git's ignore rules apply to
+untracked files; Git's ignore rules apply to untracked files. A staged edit
 that is undone in the working tree has no net change and is not shown. revisar
 cannot attribute edits to a particular agent: all local changes are included.
 Unborn repositories and linked worktrees work too.

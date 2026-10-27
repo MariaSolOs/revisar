@@ -5,7 +5,9 @@ changes and sending comments immediately to the agent, not general code review.
 
 ## Scope
 
-- Git working tree only: net staged + unstaged + untracked against HEAD.
+- Git working tree only: net staged + unstaged + untracked against HEAD, or
+  against the merge base with the target branch (origin/HEAD, main, master)
+  when the current branch has diverged from it.
 - No hosting integrations, persisted/resumable reviews, distribution machinery,
   updater, configurable themes, or Git mutations.
 - Fixed miss-dracula UI palette and embedded syntax theme.

@@ -84,7 +84,7 @@ def run(mode):
                     assert Path(repo, "a.rs").read_text() == "after\n"
                 else:
                     assert b"Please handle\n this case." in text, text
-                assert b'(old side, HEAD)' in text, text
+                assert b'(old side, base)' in text, text
                 assert b"\x1b" not in text, text
                 assert (b"WARNING:" in text) == (mode == "stale"), text
             if mode == "send":

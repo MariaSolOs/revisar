@@ -81,7 +81,7 @@ fn run() -> Result<u8> {
         [] => (),
         [arg] if arg == "--help" || arg == "-h" => {
             println!(
-                "revisar - review agentic working-tree changes\n\nUsage: revisar [--help | --version]\n\nRun inside a Git working tree. Reviews net staged + unstaged + untracked\nchanges against HEAD. UI uses /dev/tty; explicit Send writes Markdown to\nstdout. Nothing is saved. q cancels without output.\n\nKeys: c comment, v range, C file, a general, s suggest, r summary, S Send, ? help.\n\nExit codes: 0 sent, 1 error, 2 cancelled (no feedback).\nBuild: cargo build --release --locked"
+                "revisar - review agentic working-tree changes\n\nUsage: revisar [--help | --version]\n\nRun inside a Git working tree. Reviews net staged + unstaged + untracked\nchanges against HEAD, or against the merge base with origin/HEAD, main, or\nmaster when the branch has diverged from it. UI uses /dev/tty; explicit Send writes Markdown to\nstdout. Nothing is saved. q cancels without output.\n\nKeys: c comment, v range, C file, a general, s suggest, r summary, S Send, ? help.\n\nExit codes: 0 sent, 1 error, 2 cancelled (no feedback).\nBuild: cargo build --release --locked"
             );
             return Ok(0);
         }

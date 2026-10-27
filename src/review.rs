@@ -84,7 +84,7 @@ impl Anchor {
         }
         if let Some(side) = self.side {
             s.push_str(if side == Side::Old {
-                " (old side, HEAD)"
+                " (old side, base)"
             } else {
                 " (new side, working tree)"
             });
@@ -103,15 +103,23 @@ pub fn markdown(snapshot: &Snapshot, comments: &[Comment], stale: bool) -> Strin
     if comments.is_empty() {
         return String::new();
     }
+    let base = if snapshot.base.is_empty() {
+        "unborn HEAD".to_string()
+    } else if let Some(target) = &snapshot.target {
+        format!("{} (merge base of HEAD and {target})", snapshot.base)
+    } else {
+        format!("HEAD {}", snapshot.base)
+    };
+    let scope = if snapshot.target.is_some() {
+        "the branch's committed changes plus the net staged, unstaged, and untracked changes"
+    } else {
+        "the net staged, unstaged, and untracked changes"
+    };
     let mut s = format!(
-        "I reviewed the working tree in {:?} with revisar and left {} comment(s).\n\nAddress each comment. Ask me if anything is ambiguous.\n\nBase HEAD: {}. The review covers the net staged, unstaged, and untracked changes, not just changes attributable to you.\n",
+        "I reviewed {} in {:?} with revisar and left {} comment(s).\n\nAddress each comment. Ask me if anything is ambiguous.\n\nBase: {base}. The review covers {scope}, not just changes attributable to you.\n",
+        snapshot.label(),
         snapshot.root,
         comments.len(),
-        if snapshot.head.is_empty() {
-            "unborn"
-        } else {
-            &snapshot.head
-        }
     );
     if stale {
         s.push_str("\nWARNING: The working tree changed during this review. These anchors refer to the earlier snapshot. Locate the quoted code before editing; do not apply line numbers blindly.\n");
@@ -192,7 +200,8 @@ mod tests {
         let f = fixture();
         let snapshot = Snapshot {
             root: "/repo".into(),
-            head: "abc123".into(),
+            base: "abc123".into(),
+            target: None,
             files: vec![f.clone()],
         };
         assert!(markdown(&snapshot, &[], false).is_empty());
@@ -201,7 +210,7 @@ mod tests {
             body: "Fix it\nplease".into(),
         }];
         let m = markdown(&snapshot, &comments, true);
-        assert!(m.contains("\"src/a.rs\":3 (old side, HEAD)"));
+        assert!(m.contains("\"src/a.rs\":3 (old side, base)"));
         assert!(m.contains("WARNING:"));
         assert!(m.contains("```\nold\n```"));
         assert!(m.contains("Fix it\nplease"));

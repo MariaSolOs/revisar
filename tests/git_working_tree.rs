@@ -82,7 +82,7 @@ fn unborn_empty_binary_symlink_and_unusual_names() {
     }
     std::os::unix::fs::symlink("missing-target", dir.path().join("link")).unwrap();
     let s = Snapshot::load(dir.path()).unwrap();
-    assert!(s.head.is_empty());
+    assert!(s.base.is_empty());
     assert_eq!(s.files.len(), 8);
     assert!(s.files.iter().all(|f| f.status == 'A'));
     let staged = s.files.iter().find(|f| f.path == "staged").unwrap();
@@ -164,6 +164,72 @@ fn subdirectory_and_worktree_roots_and_head_change() {
     let s = Snapshot::load(&checkout).unwrap();
     assert_eq!(s.files.len(), 1);
     assert!(s.files[0].rows.iter().any(|r| r.text == "worktree"));
+}
+
+#[test]
+fn branch_is_reviewed_against_its_merge_base_with_the_target() {
+    let (dir, repo) = fixture();
+    repo.set_head("refs/heads/main").unwrap();
+    fs::write(dir.path().join("a"), "base\n").unwrap();
+    stage(&repo, "a");
+    commit(&repo);
+    let fork = repo.head().unwrap().peel_to_commit().unwrap();
+    // On the target itself the review stays working tree against HEAD.
+    let s = Snapshot::load(dir.path()).unwrap();
+    assert_eq!(
+        (s.base.as_str(), &s.target),
+        (&*fork.id().to_string(), &None)
+    );
+    assert!(s.files.is_empty());
+
+    repo.branch("feature", &fork, false).unwrap();
+    repo.set_head("refs/heads/feature").unwrap();
+    fs::write(dir.path().join("a"), "committed\n").unwrap();
+    stage(&repo, "a");
+    commit(&repo);
+    // The target moving on must not leak its changes into the branch review.
+    repo.set_head("refs/heads/main").unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    fs::write(dir.path().join("b"), "main only\n").unwrap();
+    stage(&repo, "b");
+    commit(&repo);
+    let main = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.set_head("refs/heads/feature").unwrap();
+    repo.checkout_head(Some(
+        git2::build::CheckoutBuilder::new()
+            .force()
+            .remove_untracked(true),
+    ))
+    .unwrap();
+    assert!(!dir.path().join("b").exists());
+
+    let s = Snapshot::load(dir.path()).unwrap();
+    assert_eq!(s.base, fork.id().to_string());
+    assert_eq!(s.target.as_deref(), Some("main"));
+    assert_eq!(s.label(), "branch vs main + working tree");
+    assert_eq!(s.files.len(), 1);
+    assert!(s.files[0].rows.iter().any(|r| r.text == "committed"));
+    fs::write(dir.path().join("c"), "untracked\n").unwrap();
+    let s = Snapshot::load(dir.path()).unwrap();
+    assert_eq!(
+        s.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+        vec!["a", "c"]
+    );
+
+    // The remote default branch wins over local main.
+    repo.reference("refs/remotes/origin/trunk", main.id(), true, "fixture")
+        .unwrap();
+    repo.reference_symbolic(
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/trunk",
+        true,
+        "fixture",
+    )
+    .unwrap();
+    let s = Snapshot::load(dir.path()).unwrap();
+    assert_eq!(s.target.as_deref(), Some("origin/trunk"));
+    assert_eq!(s.base, fork.id().to_string());
 }
 
 #[test]
