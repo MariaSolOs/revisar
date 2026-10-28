@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail, ensure};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -71,6 +71,9 @@ fn git(root: &Path, args: &[&str], allowed: &[i32]) -> Result<Vec<u8>> {
             "diff.external=",
             "-c",
             "diff.suppressBlankEmpty=false",
+            // Keep patch headers predictable for splitting batched diffs.
+            "-c",
+            "core.quotePath=false",
         ])
         .args(args)
         .stdin(Stdio::null())
@@ -147,6 +150,75 @@ fn branch_base(root: &Path, head: &str) -> Result<Option<(String, String)>> {
     Ok(None)
 }
 
+// The `diff --git` header Git writes for an unrenamed path (core.quotePath=false).
+fn header(path: &str) -> Vec<u8> {
+    let quote = path
+        .bytes()
+        .any(|b| b == b'"' || b == b'\\' || b < 0x20 || b == 0x7f);
+    let side = |prefix: &str| {
+        let mut out = Vec::new();
+        if !quote {
+            out.extend(prefix.bytes().chain(path.bytes()));
+            return out;
+        }
+        out.push(b'"');
+        for b in prefix.bytes().chain(path.bytes()) {
+            match b {
+                0x07 => out.extend(b"\\a"),
+                0x08 => out.extend(b"\\b"),
+                b'\t' => out.extend(b"\\t"),
+                b'\n' => out.extend(b"\\n"),
+                0x0b => out.extend(b"\\v"),
+                0x0c => out.extend(b"\\f"),
+                b'\r' => out.extend(b"\\r"),
+                b'"' => out.extend(b"\\\""),
+                b'\\' => out.extend(b"\\\\"),
+                b if b < 0x20 || b == 0x7f => out.extend(format!("\\{b:03o}").bytes()),
+                b => out.push(b),
+            }
+        }
+        out.push(b'"');
+        out
+    };
+    let mut out = b"diff --git ".to_vec();
+    out.extend(side("a/"));
+    out.push(b' ');
+    out.extend(side("b/"));
+    out
+}
+
+// Split one multi-file patch at its `diff --git` headers. Hunk lines always
+// start with a prefix character, so a header can't appear inside a hunk.
+fn split_patch(bytes: &[u8], paths: &BTreeSet<String>) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut starts = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at..].starts_with(b"diff --git ") {
+            starts.push(at);
+        }
+        at = match bytes[at..].iter().position(|b| *b == b'\n') {
+            Some(i) => at + i + 1,
+            None => bytes.len(),
+        };
+    }
+    ensure!(
+        starts.first().is_none_or(|s| *s == 0) && starts.len() == paths.len(),
+        "Unexpected batched diff output"
+    );
+    starts.push(bytes.len());
+    let mut files = BTreeMap::new();
+    for (path, w) in paths.iter().zip(starts.windows(2)) {
+        let patch = &bytes[w[0]..w[1]];
+        let first = patch.split(|b| *b == b'\n').next().unwrap_or_default();
+        ensure!(
+            first == header(path).as_slice(),
+            "Unexpected diff header for {path}"
+        );
+        files.insert(path.clone(), patch.to_vec());
+    }
+    Ok(files)
+}
+
 fn paths(bytes: &[u8]) -> Result<BTreeSet<String>> {
     bytes
         .split(|b| *b == 0)
@@ -215,13 +287,21 @@ impl Snapshot {
                 &[0],
             )?)?
         };
+        // One diff for all tracked paths: a process per file is far too slow
+        // for long branches in large repositories.
+        let mut batched = if head.is_empty() {
+            BTreeMap::new()
+        } else {
+            let mut args = vec!["diff"];
+            args.extend(DIFF_OPTIONS);
+            args.extend([&head, "--"]);
+            split_patch(&git(&root, &args, &[0])?, &tracked)?
+        };
         let mut files = Vec::new();
         let mut total = 0;
         for path in tracked.union(&untracked) {
             let is_new = head.is_empty() || untracked.contains(path);
-            let mut args = vec!["diff"];
-            args.extend(DIFF_OPTIONS);
-            if is_new {
+            let patch = if is_new {
                 // An unborn repository may have an indexed file deleted on disk.
                 if std::fs::symlink_metadata(root.join(path))
                     .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
@@ -232,11 +312,13 @@ impl Snapshot {
                     !root.join(path).is_dir(),
                     "Nested repository or directory cannot be reviewed: {path}"
                 );
+                let mut args = vec!["diff"];
+                args.extend(DIFF_OPTIONS);
                 args.extend(["--no-index", "--", "/dev/null", path]);
+                git(&root, &args, &[0, 1])?
             } else {
-                args.extend([&head, "--", path]);
-            }
-            let patch = git(&root, &args, if is_new { &[0, 1] } else { &[0] })?;
+                batched.remove(path).unwrap_or_default()
+            };
             if patch.is_empty() {
                 continue;
             }
@@ -404,6 +486,24 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn headers_match_git_quoting() {
+        assert_eq!(
+            header("a b/界"),
+            b"diff --git a/a b/\xe7\x95\x8c b/a b/\xe7\x95\x8c"
+        );
+        assert_eq!(
+            header("x\n\"\\\x01"),
+            b"diff --git \"a/x\\n\\\"\\\\\\001\" \"b/x\\n\\\"\\\\\\001\""
+        );
+        let paths: BTreeSet<_> = ["a".to_string(), "b".into()].into();
+        let patch = b"diff --git a/a b/a\n@@ -1 +1 @@\n-diff --git x\n+y\ndiff --git a/b b/b\n";
+        let split = split_patch(patch, &paths).unwrap();
+        assert!(split["a"].ends_with(b"+y\n"));
+        assert_eq!(split["b"], b"diff --git a/b b/b\n");
+        assert!(split_patch(b"diff --git a/b b/b\n", &["a".to_string()].into()).is_err());
     }
 
     #[test]
