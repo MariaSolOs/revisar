@@ -141,7 +141,8 @@ or `-- NORMAL --`, and the terminal caret is a block in Normal mode.
   Normal. Arrow keys, Home/End, `Ctrl-a/e`, `Ctrl-w`, and `Ctrl-u` work as before.
 - Normal: `Enter` keeps the comment; `Esc` discards the edit (or cancels a
   pending operator). Supported commands: `h/j/k/l` and arrows, `w`/`b`, `0`/`$`,
-  `i`/`a`/`o`/`O`, `x`, and `u` (undo each command or Insert session).
+  `f`/`F`/`t`/`T` and a character (current line only), `i`/`a`/`o`/`O`, `x`,
+  and `u` (undo each command or Insert session).
 - Operators: `d` (delete) and `c` (change: delete, then Insert) take any of
   those motions, plus `dd`/`cc` for the current line. `dj`/`dk` are linewise;
   `dw` stops at the line end and `cw` keeps the blank after a word, as in Vim.

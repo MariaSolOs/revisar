@@ -623,9 +623,8 @@ fn editor_popup(frame: &mut Frame, area: Rect, title: &str, editor: &Editor, hin
     frame.set_cursor_position((sections[0].x + x as u16, sections[0].y + (y - top) as u16));
 }
 
-const INSERT_HINT: &str = "-- INSERT --  Ctrl-s: keep  Esc: normal\nEnter/Ctrl-j: newline";
-const NORMAL_HINT: &str =
-    "-- NORMAL --  Enter: keep  Esc: discard\nhjkl w b 0 $  i a o O  x u  d/c+motion";
+const INSERT_HINT: &str = "-- INSERT --  Ctrl-s: keep  Esc: normal";
+const NORMAL_HINT: &str = "-- NORMAL --  Enter: keep  Esc: discard";
 
 fn comment_hint(editor: &Editor) -> &'static str {
     match editor.mode {
@@ -1080,16 +1079,16 @@ mod tests {
         for area in [Rect::new(0, 0, 120, 40), Rect::new(5, 3, 200, 80)] {
             for text in ["", "A short comment"] {
                 let popup = comment_layout(area, &Editor::new(text));
-                assert_eq!((popup.width, popup.height), (77, 8));
+                assert_eq!((popup.width, popup.height), (77, 7));
                 assert_eq!(popup.x, area.x + (area.width - popup.width) / 2);
                 assert_eq!(popup.y, area.y + (area.height - popup.height) / 2);
             }
             let multiline = Editor::new("one\ntwo\nthree\nfour\nfive\nsix");
-            assert_eq!(comment_layout(area, &multiline).height, 10);
+            assert_eq!(comment_layout(area, &multiline).height, 9);
             let wrapped = Editor::new(&"界".repeat(100));
-            assert_eq!(comment_layout(area, &wrapped).height, 8);
+            assert_eq!(comment_layout(area, &wrapped).height, 7);
             let long = Editor::new(&"line\n".repeat(30));
-            assert_eq!(comment_layout(area, &long).height, 16);
+            assert_eq!(comment_layout(area, &long).height, 15);
         }
     }
 
@@ -1099,11 +1098,11 @@ mod tests {
         for (mut editor, hints) in [
             (
                 Editor::new(&text),
-                ["-- INSERT --  Ctrl-s: keep", "Enter/Ctrl-j: newline"],
+                ["-- INSERT --  Ctrl-s: keep", "Esc: normal"],
             ),
             (
                 Editor::normal(&text, 0),
-                ["-- NORMAL --  Enter: keep", "x u  d/c+motion"],
+                ["-- NORMAL --  Enter: keep", "Esc: discard"],
             ),
         ] {
             for (width, height) in [(45, 12), (60, 20), (120, 40)] {
@@ -1119,9 +1118,9 @@ mod tests {
                         })
                         .unwrap();
                     let cursor = terminal.get_cursor_position().unwrap();
-                    // Borders and the two hint rows are outside the editing area.
+                    // Borders and the hint row is outside the editing area.
                     assert!(cursor.x > popup.x && cursor.x < popup.right() - 1);
-                    assert!(cursor.y > popup.y && cursor.y < popup.bottom() - 3);
+                    assert!(cursor.y > popup.y && cursor.y < popup.bottom() - 2);
                     let buffer = terminal.backend().buffer();
                     let text: String = (0..height)
                         .flat_map(|y| (0..width).map(move |x| buffer[(x, y)].symbol()))

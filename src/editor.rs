@@ -23,6 +23,8 @@ pub struct Editor {
     // Vim state, used only through `vim`, `escape`, and `paste`.
     pub mode: VimMode,
     pending: Option<char>,
+    // A pending `f`/`F`/`t`/`T` waiting for its target character.
+    find: Option<char>,
     undo: Vec<(Vec<char>, usize)>,
 }
 
@@ -117,13 +119,14 @@ impl Editor {
             }
             true
         } else {
-            self.pending.take().is_some()
+            self.pending.take().is_some() | self.find.take().is_some()
         }
     }
 
     pub fn paste(&mut self, s: &str) {
         if self.mode == VimMode::Normal {
             self.pending = None;
+            self.find = None;
             self.checkpoint();
         }
         self.insert(s);
@@ -135,13 +138,34 @@ impl Editor {
             return self.input(key);
         }
         let pending = self.pending.take();
+        let find = self.find.take();
         if key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
             return;
         }
+        if let Some(kind) = find {
+            if let KeyCode::Char(target) = key.code
+                && let Some(to) = self.find_char(kind, target)
+            {
+                match pending {
+                    // Forward finds are inclusive; backward ones exclude the cursor.
+                    Some(op) if matches!(kind, 'f' | 't') => {
+                        self.operate(op, Span::Chars(self.cursor, to + 1))
+                    }
+                    Some(op) => self.operate(op, Span::Chars(to, self.cursor)),
+                    None => self.cursor = to,
+                }
+            }
+            return self.clamp();
+        }
         if let Some(op) = pending {
+            if let KeyCode::Char(kind @ ('f' | 'F' | 't' | 'T')) = key.code {
+                self.pending = Some(op);
+                self.find = Some(kind);
+                return;
+            }
             if let Some(span) = self.span(op, key.code) {
                 self.operate(op, span);
             }
@@ -149,6 +173,7 @@ impl Editor {
         }
         match key.code {
             KeyCode::Char(op @ ('d' | 'c')) => self.pending = Some(op),
+            KeyCode::Char(kind @ ('f' | 'F' | 't' | 'T')) => self.find = Some(kind),
             KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => {
                 if self.cursor > self.home() {
                     self.cursor -= 1;
@@ -275,6 +300,29 @@ impl Editor {
             .is_some_and(|(chars, _)| *chars == self.chars)
         {
             self.undo.pop();
+        }
+    }
+
+    // Vim `f`/`F`/`t`/`T`: where the cursor lands for `target` on the current
+    // line, or None when it is not found.
+    fn find_char(&self, kind: char, target: char) -> Option<usize> {
+        let c = self.cursor;
+        let (home, end) = (self.home(), self.end());
+        match kind {
+            'f' | 't' => {
+                let i = c
+                    + 1
+                    + self
+                        .chars
+                        .get(c + 1..end)?
+                        .iter()
+                        .position(|ch| *ch == target)?;
+                Some(if kind == 't' { i - 1 } else { i })
+            }
+            _ => {
+                let i = home + self.chars[home..c].iter().rposition(|ch| *ch == target)?;
+                Some(if kind == 'T' { i + 1 } else { i })
+            }
         }
     }
 
@@ -650,6 +698,35 @@ mod tests {
         // leading blanks.
         assert_eq!(op("a bc\nd", 5, "db"), ("a \nd".into(), 1, Normal));
         assert_eq!(op("  bc\nd", 5, "db"), ("d".into(), 0, Normal));
+    }
+
+    #[test]
+    fn vim_find_motions() {
+        use VimMode::{Insert, Normal};
+        let text = "a.b.c d\nx.y";
+        for (cursor, cmd, expected) in [
+            (0, "f.", (text, 1, Normal)),
+            (1, "f.", (text, 3, Normal)),
+            (0, "t.", (text, 0, Normal)),
+            (0, "tc", (text, 3, Normal)),
+            (6, "F.", (text, 3, Normal)),
+            (6, "T.", (text, 4, Normal)),
+            (4, "T.", (text, 4, Normal)),
+            // Finds stay on the current line; a miss or Esc does nothing.
+            (0, "fx", (text, 0, Normal)),
+            (8, "F.", (text, 8, Normal)),
+            (0, "f\x1bl", (text, 1, Normal)),
+            (0, "df.", ("b.c d\nx.y", 0, Normal)),
+            (0, "dtc", ("c d\nx.y", 0, Normal)),
+            (6, "dF.", ("a.bd\nx.y", 3, Normal)),
+            (6, "dT.", ("a.b.d\nx.y", 4, Normal)),
+            (4, "dT.", (text, 4, Normal)),
+            (0, "ct ", (" d\nx.y", 0, Insert)),
+            (0, "cfx", (text, 0, Normal)),
+        ] {
+            let expected = (expected.0.to_string(), expected.1, expected.2);
+            assert_eq!(op(text, cursor, cmd), expected, "{cmd} at {cursor}");
+        }
     }
 
     #[test]
