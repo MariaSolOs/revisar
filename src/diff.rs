@@ -51,8 +51,8 @@ pub struct FileDiff {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub root: PathBuf,
-    // Commit the working tree is diffed against: HEAD, or its merge base with
-    // the target branch when the current branch has diverged from it.
+    // Commit the working tree is diffed against: HEAD, or, when the working
+    // tree is clean, its merge base with the target branch it diverged from.
     pub base: String,
     // Short target ref (e.g. "origin/main") when base is a merge base.
     pub target: Option<String>,
@@ -246,18 +246,11 @@ impl Snapshot {
             git(&root, &["ls-files", "--unmerged", "-z"], &[0])?.is_empty(),
             "Resolve merge conflicts before reviewing"
         );
-        let head = line(git(
+        let mut head = line(git(
             &root,
             &["rev-parse", "--verify", "-q", "HEAD"],
             &[0, 1],
         )?)?;
-        let (head, target) = match head.is_empty() {
-            true => (head, None),
-            false => match branch_base(&root, &head)? {
-                Some((base, target)) => (base, Some(target)),
-                None => (head, None),
-            },
-        };
         let untracked = if include_untracked {
             paths(&git(
                 &root,
@@ -267,11 +260,32 @@ impl Snapshot {
         } else {
             BTreeSet::new()
         };
+        // Uncommitted changes take priority. Only a clean working tree falls back
+        // to the branch's committed changes against its merge base.
+        let mut files = Self::files(&root, &head, &untracked)?;
+        let mut target = None;
+        if files.is_empty()
+            && !head.is_empty()
+            && let Some((base, short)) = branch_base(&root, &head)?
+        {
+            files = Self::files(&root, &base, &untracked)?;
+            head = base;
+            target = Some(short);
+        }
+        Ok(Self {
+            root,
+            base: head,
+            target,
+            files,
+        })
+    }
+
+    fn files(root: &Path, head: &str, untracked: &BTreeSet<String>) -> Result<Vec<FileDiff>> {
         let tracked = if head.is_empty() {
-            paths(&git(&root, &["ls-files", "--cached", "-z"], &[0])?)?
+            paths(&git(root, &["ls-files", "--cached", "-z"], &[0])?)?
         } else {
             paths(&git(
-                &root,
+                root,
                 &[
                     "diff",
                     "--no-ext-diff",
@@ -281,7 +295,7 @@ impl Snapshot {
                     "--ignore-submodules=none",
                     "--name-only",
                     "-z",
-                    &head,
+                    head,
                     "--",
                 ],
                 &[0],
@@ -294,12 +308,12 @@ impl Snapshot {
         } else {
             let mut args = vec!["diff"];
             args.extend(DIFF_OPTIONS);
-            args.extend([&head, "--"]);
-            split_patch(&git(&root, &args, &[0])?, &tracked)?
+            args.extend([head, "--"]);
+            split_patch(&git(root, &args, &[0])?, &tracked)?
         };
         let mut files = Vec::new();
         let mut total = 0;
-        for path in tracked.union(&untracked) {
+        for path in tracked.union(untracked) {
             let is_new = head.is_empty() || untracked.contains(path);
             let patch = if is_new {
                 // An unborn repository may have an indexed file deleted on disk.
@@ -315,7 +329,7 @@ impl Snapshot {
                 let mut args = vec!["diff"];
                 args.extend(DIFF_OPTIONS);
                 args.extend(["--no-index", "--", "/dev/null", path]);
-                git(&root, &args, &[0, 1])?
+                git(root, &args, &[0, 1])?
             } else {
                 batched.remove(path).unwrap_or_default()
             };
@@ -342,17 +356,12 @@ impl Snapshot {
                 patch,
             });
         }
-        Ok(Self {
-            root,
-            base: head,
-            target,
-            files,
-        })
+        Ok(files)
     }
 
     pub fn label(&self) -> String {
         match &self.target {
-            Some(target) => format!("branch vs {target} + working tree"),
+            Some(target) => format!("branch vs {target}"),
             None => "working tree".into(),
         }
     }

@@ -166,8 +166,17 @@ fn subdirectory_and_worktree_roots_and_head_change() {
     assert!(s.files[0].rows.iter().any(|r| r.text == "worktree"));
 }
 
+fn head(repo: &Repository) -> String {
+    repo.head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id()
+        .to_string()
+}
+
 #[test]
-fn branch_is_reviewed_against_its_merge_base_with_the_target() {
+fn clean_branch_is_reviewed_against_its_merge_base_with_the_target() {
     let (dir, repo) = fixture();
     repo.set_head("refs/heads/main").unwrap();
     fs::write(dir.path().join("a"), "base\n").unwrap();
@@ -207,15 +216,19 @@ fn branch_is_reviewed_against_its_merge_base_with_the_target() {
     let s = Snapshot::load(dir.path()).unwrap();
     assert_eq!(s.base, fork.id().to_string());
     assert_eq!(s.target.as_deref(), Some("main"));
-    assert_eq!(s.label(), "branch vs main + working tree");
+    assert_eq!(s.label(), "branch vs main");
     assert_eq!(s.files.len(), 1);
     assert!(s.files[0].rows.iter().any(|r| r.text == "committed"));
+    // Working-tree changes take priority over the branch's committed changes.
     fs::write(dir.path().join("c"), "untracked\n").unwrap();
     let s = Snapshot::load(dir.path()).unwrap();
+    assert_eq!((s.base.as_str(), &s.target), (&*head(&repo), &None));
+    assert_eq!(s.label(), "working tree");
     assert_eq!(
         s.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
-        vec!["a", "c"]
+        vec!["c"]
     );
+    fs::remove_file(dir.path().join("c")).unwrap();
 
     // The remote default branch wins over local main.
     repo.reference("refs/remotes/origin/trunk", main.id(), true, "fixture")

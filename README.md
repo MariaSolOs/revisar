@@ -153,14 +153,14 @@ In the summary, `Ctrl-d/u` scrolls the full selected comment and code excerpt.
 
 ## Scope and boundaries
 
-The review is the **net working tree against a base commit**, including staged,
-unstaged, and untracked files. The base is HEAD, unless the current branch has
-diverged from the target branch (`origin/HEAD`, else local `main`, else
-`master`): then it is their merge base, so the branch's committed changes are
-reviewed even when the working tree is clean. Git's ignore rules apply to
-untracked files; Git's ignore rules apply to untracked files. A staged edit
-that is undone in the working tree has no net change and is not shown. revisar
-cannot attribute edits to a particular agent: all local changes are included.
+The review is the **net working tree against HEAD**, including staged,
+unstaged, and untracked files. Only when the working tree is clean and the
+current branch has diverged from the target branch (`origin/HEAD`, else local
+`main`, else `master`) does the review fall back to the branch's committed
+changes against their merge base. Git's ignore rules apply to untracked files.
+A staged edit that is undone in the working tree has no net change and is not
+shown. revisar cannot attribute edits to a particular agent: all local changes
+are included.
 Unborn repositories and linked worktrees work too.
 
 Git is read-only: no staging, commits, resets, fetches, hooks, or external diff /

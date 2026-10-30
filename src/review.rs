@@ -111,7 +111,7 @@ pub fn markdown(snapshot: &Snapshot, comments: &[Comment], stale: bool) -> Strin
         format!("HEAD {}", snapshot.base)
     };
     let scope = if snapshot.target.is_some() {
-        "the branch's committed changes plus the net staged, unstaged, and untracked changes"
+        "the branch's committed changes (the working tree was clean)"
     } else {
         "the net staged, unstaged, and untracked changes"
     };
