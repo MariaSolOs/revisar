@@ -223,7 +223,14 @@ export default function revisarExtension(pi: ExtensionAPI) {
                 ctx.ui.notify((error as Error).message, "warning");
                 return;
             }
-            const targetCwd = repo ? path.resolve(ctx.cwd, repo) : ctx.cwd;
+            // Resuming a session from another worktree keeps the stored session
+            // cwd in ctx.cwd. Pi's launch directory is the one being worked on,
+            // so it takes priority; the session cwd is only a fallback.
+            const launchCwd = process.cwd();
+            const targetCwd = repo ? path.resolve(launchCwd, repo) : launchCwd;
+            const candidates = repo
+                ? [targetCwd]
+                : [...new Set([launchCwd, ctx.cwd])];
             if (active) {
                 ctx.ui.notify("A revisar review is already open", "warning");
                 return;
@@ -260,24 +267,33 @@ export default function revisarExtension(pi: ExtensionAPI) {
                         `Build revisar first: cd ${quote(CHECKOUT)} && cargo build --release --locked`,
                     );
                 });
-                let root: string;
+                let root: string | undefined;
                 let gitDir: string | undefined;
-                try {
-                    const result = await exec(
-                        "git",
-                        ["rev-parse", "--show-toplevel"],
-                        { cwd: targetCwd, timeout: 10_000, signal },
-                    );
-                    root = result.stdout.replace(/\n$/, "");
-                } catch (error) {
-                    // Explicit targets never switch repositories. Only fall back
-                    // on Git's discovery failure, not missing Git or cancellation.
-                    if (
-                        repo ||
-                        signal.aborted ||
-                        (error as { code?: unknown }).code !== 128
-                    )
-                        throw error;
+                let discoveryError: unknown;
+                for (const cwd of candidates) {
+                    try {
+                        const result = await exec(
+                            "git",
+                            ["rev-parse", "--show-toplevel"],
+                            { cwd, timeout: 10_000, signal },
+                        );
+                        root = result.stdout.replace(/\n$/, "");
+                        break;
+                    } catch (error) {
+                        // Only fall back on Git's discovery failure, not
+                        // missing Git or cancellation.
+                        if (
+                            signal.aborted ||
+                            (error as { code?: unknown }).code !== 128
+                        )
+                            throw error;
+                        discoveryError ??= error;
+                    }
+                }
+                if (root === undefined) {
+                    // Explicit targets never switch repositories.
+                    const error = discoveryError;
+                    if (repo) throw error;
                     root = os.homedir();
                     const candidate = path.join(root, ".cfg");
                     if (

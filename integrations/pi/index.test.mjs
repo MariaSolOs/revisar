@@ -23,6 +23,7 @@ const checkout = fileURLToPath(new URL("../../", import.meta.url));
 const binary = path.join(checkout, "target", "release", "revisar");
 const realExec = promisify(realExecFile);
 let scenario;
+const originalCwd = process.cwd();
 const quote = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
 function execFile() {}
 execFile[promisify.custom] = (file, args, options) => {
@@ -44,7 +45,12 @@ execFile[promisify.custom] = (file, args, options) => {
             }
             assert.deepEqual(args, ["rev-parse", "--show-toplevel"]);
             scenario.gitCwd = options.cwd;
-            if (scenario.gitError)
+            scenario.gitCwds.push(options.cwd);
+            if (
+                typeof scenario.gitError === "function"
+                    ? scenario.gitError(options.cwd)
+                    : scenario.gitError
+            )
                 throw Object.assign(new Error("not a git repository"), {
                     code: 128,
                 });
@@ -114,6 +120,7 @@ async function setup(t, options = {}) {
         root,
         program: "printf 'review feedback\\n'\nexit 0\n",
         closed: [],
+        gitCwds: [],
         ...options,
     };
     const current = scenario;
@@ -121,7 +128,10 @@ async function setup(t, options = {}) {
     const home = path.join(root, "home");
     await mkdir(home);
     process.env.HOME = home;
+    // Pi's launch directory; ctx.cwd is the session's stored cwd.
+    process.chdir(root);
     t.after(async () => {
+        process.chdir(originalCwd);
         if (previousHome === undefined) delete process.env.HOME;
         else process.env.HOME = previousHome;
         await rm(root, { recursive: true, force: true });
@@ -253,7 +263,7 @@ test("failed launch never closes an unrelated tab", async (t) => {
     await assert.rejects(access(scenario.dir), { code: "ENOENT" });
 });
 
-test("--repo resolves paths from Pi's cwd and runs the wrapper in the Git root", async (t) => {
+test("--repo resolves paths from Pi's launch directory and runs the wrapper in the Git root", async (t) => {
     const cases = [
         ["relative", () => "--repo ../other"],
         ["equals", () => "--repo=../other"],
@@ -270,8 +280,9 @@ test("--repo resolves paths from Pi's cwd and runs the wrapper in the Git root",
         await t.test(name, async (t) => {
             const h = await setup(t, { program: "pwd -P\n" });
             const root = scenario.root;
-            h.ctx.cwd = path.join(root, "session");
-            await mkdir(h.ctx.cwd);
+            await mkdir(path.join(root, "session"));
+            process.chdir(path.join(root, "session"));
+            h.ctx.cwd = path.join(root, "stored-session");
             const target = path.join(
                 root,
                 name.includes("quotes")
@@ -290,10 +301,34 @@ test("--repo resolves paths from Pi's cwd and runs the wrapper in the Git root",
             assert.deepEqual(h.sent, [
                 { text: root, options: { deliverAs: "followUp" } },
             ]);
-            assert.equal(h.ctx.cwd, path.join(root, "session"));
+            assert.equal(h.ctx.cwd, path.join(root, "stored-session"));
             await assert.rejects(access(scenario.dir), { code: "ENOENT" });
         });
     }
+});
+
+test("launch directory takes priority over the stored session cwd", async (t) => {
+    const h = await setup(t);
+    const launch = path.join(scenario.root, "worktree");
+    await mkdir(launch);
+    process.chdir(launch);
+    await h.run();
+    assert.deepEqual(scenario.gitCwds, [launch]);
+    assert.equal(h.sent.length, 1);
+
+    // Outside a repository, fall back to the stored session cwd.
+    scenario.gitCwds = [];
+    scenario.gitError = (cwd) => cwd === launch;
+    await h.run();
+    assert.deepEqual(scenario.gitCwds, [launch, h.ctx.cwd]);
+    assert.equal(h.sent.length, 2);
+
+    // Explicit targets never fall back.
+    scenario.gitCwds = [];
+    await h.run("--repo .");
+    assert.deepEqual(scenario.gitCwds, [launch]);
+    assert.match(h.notifications.at(-1), /not a git repository/);
+    assert.equal(h.sent.length, 2);
 });
 
 test("invalid --repo arguments never inspect Git or launch", async (t) => {
