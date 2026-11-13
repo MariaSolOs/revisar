@@ -1,4 +1,4 @@
-use crate::diff::{FileDiff, Kind, display_text};
+use crate::diff::{FileDiff, Kind, display_text, word_changes};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::Span,
@@ -20,6 +20,9 @@ pub const ADD: Color = Color::Rgb(0x97, 0xed, 0xa2);
 pub const ADD_BG: Color = Color::Rgb(0x22, 0x37, 0x2c);
 pub const DEL: Color = Color::Rgb(0xec, 0x6a, 0x88);
 pub const DEL_BG: Color = Color::Rgb(0x34, 0x22, 0x31);
+// Stronger tints for the words that changed within a paired delete/add line.
+pub const ADD_WORD_BG: Color = Color::Rgb(0x2f, 0x6b, 0x45);
+pub const DEL_WORD_BG: Color = Color::Rgb(0x7a, 0x2e, 0x4c);
 pub const CONTEXT: Color = Color::Rgb(0xb0, 0x8b, 0xbb);
 pub const PURPLE: Color = Color::Rgb(0xba, 0xa0, 0xe8);
 pub const PINK: Color = Color::Rgb(0xe4, 0x8c, 0xc1);
@@ -62,9 +65,11 @@ impl Syntax {
             .unwrap_or_else(|| self.syntaxes.find_syntax_plain_text());
         let mut old = HighlightLines::new(syntax, &self.theme);
         let mut new = HighlightLines::new(syntax, &self.theme);
+        let changes = word_changes(&file.rows);
         file.rows
             .iter()
-            .map(|row| {
+            .zip(&changes)
+            .map(|(row, changed)| {
                 if row.kind == Kind::Hunk {
                     // Omitted source between hunks is unknown; don't carry stale parser state.
                     old = HighlightLines::new(syntax, &self.theme);
@@ -96,13 +101,18 @@ impl Syntax {
                         Style::default().fg(FG),
                     )];
                 };
+                let word_bg = if row.kind == Kind::Delete {
+                    DEL_WORD_BG
+                } else {
+                    ADD_WORD_BG
+                };
+                let mut offset = 0;
                 highlighted
                     .into_iter()
-                    .filter_map(|(s, text)| {
+                    .flat_map(|(s, text)| {
                         let text = text.trim_end_matches('\n');
-                        if text.is_empty() {
-                            return None;
-                        }
+                        let start = offset;
+                        offset += text.len();
                         let c = s.foreground;
                         let mut style = Style::default().fg(Color::Rgb(c.r, c.g, c.b));
                         if s.font_style.contains(FontStyle::BOLD) {
@@ -114,12 +124,41 @@ impl Syntax {
                         if s.font_style.contains(FontStyle::UNDERLINE) {
                             style = style.add_modifier(Modifier::UNDERLINED);
                         }
-                        Some(Span::styled(display_text(text), style))
+                        split_changed(text, start, changed)
+                            .into_iter()
+                            .map(move |(part, hit)| {
+                                let style = if hit { style.bg(word_bg) } else { style };
+                                Span::styled(display_text(part), style)
+                            })
                     })
                     .collect()
             })
             .collect()
     }
+}
+
+// Split a syntax segment starting at byte `start` of the line into pieces that
+// are entirely inside or outside the changed ranges.
+fn split_changed<'a>(
+    text: &'a str,
+    start: usize,
+    changed: &[std::ops::Range<usize>],
+) -> Vec<(&'a str, bool)> {
+    let end = start + text.len();
+    let mut out = Vec::new();
+    let mut at = start;
+    for r in changed.iter().filter(|r| r.end > start && r.start < end) {
+        let (from, to) = (r.start.max(start), r.end.min(end));
+        if from > at {
+            out.push((&text[at - start..from - start], false));
+        }
+        out.push((&text[from - start..to - start], true));
+        at = to;
+    }
+    if at < end {
+        out.push((&text[at - start..], false));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -140,5 +179,27 @@ mod tests {
             assert!(colors[1].iter().any(|s| s.style.fg == Some(PINK)));
             assert!(colors[1].iter().any(|s| s.style.fg == Some(YELLOW)));
         }
+    }
+
+    #[test]
+    fn changed_words_get_emphasis_background() {
+        let f = FileDiff {
+            path: "main.rs".into(),
+            status: 'M',
+            patch: vec![],
+            rows: crate::diff::parse_patch(
+                "@@ -1 +1 @@\n-let value = \"hello\";\n+let value = \"world\";\n",
+            )
+            .unwrap(),
+        };
+        let colors = Syntax::default().highlight(&f);
+        let emphasized = |row: &[Span], bg| -> String {
+            row.iter()
+                .filter(|s| s.style.bg == Some(bg))
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+        assert_eq!(emphasized(&colors[1], DEL_WORD_BG), "hello");
+        assert_eq!(emphasized(&colors[2], ADD_WORD_BG), "world");
     }
 }

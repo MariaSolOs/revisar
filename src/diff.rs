@@ -459,6 +459,140 @@ fn range(s: &str, prefix: char) -> Result<(usize, usize)> {
 }
 
 // Escape terminal control characters while leaving the underlying anchors exact.
+// Beyond this many tokens per line, quadratic matching costs more than the
+// emphasis is worth; such lines keep plain whole-line coloring.
+const MAX_WORD_DIFF_TOKENS: usize = 400;
+
+/// Byte ranges of `row.text` that changed within a paired delete/add line.
+///
+/// The i-th deleted row of a contiguous delete-then-add block pairs with the
+/// i-th added row. Pairs that share too little are rewrites, not edits, and
+/// get no ranges so whole-line coloring stays readable.
+pub fn word_changes(rows: &[Row]) -> Vec<Vec<std::ops::Range<usize>>> {
+    let mut out = vec![Vec::new(); rows.len()];
+    let mut i = 0;
+    while i < rows.len() {
+        let dels = rows[i..]
+            .iter()
+            .take_while(|r| r.kind == Kind::Delete)
+            .count();
+        let adds = rows[i + dels..]
+            .iter()
+            .take_while(|r| r.kind == Kind::Add)
+            .count();
+        if dels == 0 || adds == 0 {
+            i += dels.max(1);
+            continue;
+        }
+        for k in 0..dels.min(adds) {
+            let (d, a) = (i + k, i + dels + k);
+            if let Some((old, new)) = word_diff(&rows[d].text, &rows[a].text) {
+                out[d] = old;
+                out[a] = new;
+            }
+        }
+        i += dels + adds;
+    }
+    out
+}
+
+type Ranges = Vec<std::ops::Range<usize>>;
+
+fn word_diff(old: &str, new: &str) -> Option<(Ranges, Ranges)> {
+    let (a, b) = (tokens(old), tokens(new));
+    if a.len() > MAX_WORD_DIFF_TOKENS || b.len() > MAX_WORD_DIFF_TOKENS {
+        return None;
+    }
+    let tok = |s: &str, r: &std::ops::Range<usize>| s[r.clone()].to_string();
+    let (at, bt): (Vec<_>, Vec<_>) = (
+        a.iter().map(|r| tok(old, r)).collect(),
+        b.iter().map(|r| tok(new, r)).collect(),
+    );
+    // LCS table over tokens, filled from the end so the walk below is forward.
+    let (n, m) = (a.len(), b.len());
+    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
+    for x in (0..n).rev() {
+        for y in (0..m).rev() {
+            lcs[x][y] = if at[x] == bt[y] {
+                lcs[x + 1][y + 1] + 1
+            } else {
+                lcs[x + 1][y].max(lcs[x][y + 1])
+            };
+        }
+    }
+    let (mut keep_a, mut keep_b) = (vec![false; n], vec![false; m]);
+    let (mut x, mut y) = (0, 0);
+    while x < n && y < m {
+        if at[x] == bt[y] {
+            keep_a[x] = true;
+            keep_b[y] = true;
+            x += 1;
+            y += 1;
+        } else if lcs[x + 1][y] >= lcs[x][y + 1] {
+            x += 1;
+        } else {
+            y += 1;
+        }
+    }
+    // Similarity over non-whitespace bytes: shared indentation alone must not
+    // make two unrelated lines look like a small edit.
+    let solid = |s: &str, r: &std::ops::Range<usize>| {
+        if s[r.clone()].trim().is_empty() {
+            0
+        } else {
+            r.len()
+        }
+    };
+    let common: usize = a
+        .iter()
+        .zip(&keep_a)
+        .filter(|(_, k)| **k)
+        .map(|(r, _)| solid(old, r))
+        .sum();
+    let total = a.iter().map(|r| solid(old, r)).sum::<usize>()
+        + b.iter().map(|r| solid(new, r)).sum::<usize>();
+    // Require shared text to be at least half the average line length.
+    if common == 0 || common * 4 < total {
+        return None;
+    }
+    let ranges = |toks: &[std::ops::Range<usize>], keep: &[bool]| {
+        let mut out: Ranges = Vec::new();
+        for (r, _) in toks.iter().zip(keep).filter(|(_, k)| !**k) {
+            match out.last_mut() {
+                Some(last) if last.end == r.start => last.end = r.end,
+                _ => out.push(r.clone()),
+            }
+        }
+        out
+    };
+    let (old_ranges, new_ranges) = (ranges(&a, &keep_a), ranges(&b, &keep_b));
+    (!old_ranges.is_empty() || !new_ranges.is_empty()).then_some((old_ranges, new_ranges))
+}
+
+// Words, whitespace runs, and single punctuation characters.
+fn tokens(s: &str) -> Vec<std::ops::Range<usize>> {
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    };
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut prev = None;
+    for (i, c) in s.char_indices() {
+        let k = class(c);
+        match out.last_mut() {
+            Some(last) if prev == Some(k) && k != 2 => last.end = i + c.len_utf8(),
+            _ => out.push(i..i + c.len_utf8()),
+        }
+        prev = Some(k);
+    }
+    out
+}
+
 pub fn display_text(s: &str) -> String {
     s.chars()
         .map(|c| match c {
@@ -472,6 +606,26 @@ pub fn display_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_changes_mark_only_edited_words_in_paired_lines() {
+        let rows = parse_patch(
+            "@@ -1,3 +1,3 @@\n ctx\n-let total = old_value + 1;\n+let total = new_value + 1;\n-unrelated\n+completely different text here\n",
+        )
+        .unwrap();
+        let changes = word_changes(&rows);
+        let at = |i: usize| -> Vec<&str> {
+            changes[i]
+                .iter()
+                .map(|r| &rows[i].text[r.clone()])
+                .collect()
+        };
+        assert_eq!(rows[2].kind, Kind::Delete);
+        assert_eq!(at(2), ["old_value"]);
+        assert_eq!(at(3), ["new_value"]);
+        assert!(changes[4].is_empty() && changes[5].is_empty());
+        assert!(changes[0].is_empty() && changes[1].is_empty());
+    }
 
     #[test]
     fn tracked_only_omits_untracked_files() {

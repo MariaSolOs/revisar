@@ -349,6 +349,12 @@ impl Ui {
             } else {
                 crop(&highlighted[row_index], left, width.saturating_sub(1))
             };
+            if has_comment || selected {
+                // Comment and range-selection tints must span the whole row.
+                for s in &mut code {
+                    s.style.bg = None;
+                }
+            }
             if app.matches.binary_search(&(app.file, row_index)).is_ok() {
                 for s in &mut code {
                     s.style = s.style.add_modifier(Modifier::UNDERLINED);
@@ -897,10 +903,20 @@ mod tests {
         let area = Rect::new(0, 0, 80, 14);
         let inner = block("", true).inner(area);
         let assert_row = |terminal: &Terminal<TestBackend>, row: u16, bg| {
+            // Paired "old"/"new" words are emphasized only on plain diff rows.
+            let word = match bg {
+                t::ADD_BG => Some(t::ADD_WORD_BG),
+                t::DEL_BG => Some(t::DEL_WORD_BG),
+                _ => None,
+            };
             for x in inner.x..inner.right() {
+                let expected = match word {
+                    Some(word) if (16..19).contains(&(x - inner.x)) => word,
+                    _ => bg,
+                };
                 assert_eq!(
                     terminal.backend().buffer()[(x, inner.y + row)].bg,
-                    bg,
+                    expected,
                     "Wrong background at column {x}, diff row {row}"
                 );
             }
