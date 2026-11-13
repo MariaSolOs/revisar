@@ -4,6 +4,7 @@ use crate::{
     review::{Anchor, Comment, Side},
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Clone, Default)]
 pub struct View {
@@ -46,6 +47,8 @@ pub enum Action {
     Send,
     SendStale,
     Cancel,
+    // Open a working-tree file at a 1-based line, then reload the snapshot.
+    Edit(PathBuf, usize),
 }
 
 pub struct App {
@@ -147,17 +150,7 @@ impl App {
                 } else if key.code == KeyCode::Enter {
                     self.query = editor.text();
                     self.mode = Mode::Normal;
-                    self.matches.clear();
-                    if !self.query.is_empty() {
-                        let q = self.query.to_lowercase();
-                        for (f, file) in self.snapshot.files.iter().enumerate() {
-                            for (r, row) in file.rows.iter().enumerate() {
-                                if row.text.to_lowercase().contains(&q) {
-                                    self.matches.push((f, r));
-                                }
-                            }
-                        }
-                    }
+                    self.search();
                     self.next_match(false);
                 } else {
                     editor.input(key);
@@ -312,6 +305,7 @@ impl App {
             KeyCode::Char('N') => self.next_match(true),
             _ if self.snapshot.files.is_empty() => (),
             KeyCode::Char('C') => self.draft(Anchor::file(&self.snapshot.files[self.file])),
+            KeyCode::Char('e') if !self.summary => return self.edit(),
             _ if self.summary || self.files_focused => (),
             KeyCode::Char('h') | KeyCode::Left if !self.wrap => {
                 self.views[self.file].left = self.views[self.file].left.saturating_sub(4)
@@ -366,6 +360,72 @@ impl App {
             editing: None,
             editor: Editor::default(),
         });
+    }
+
+    fn edit(&mut self) -> Action {
+        let file = &self.snapshot.files[self.file];
+        if file.status == 'D' {
+            self.message = format!("{} was deleted; nothing to open", file.path);
+            return Action::Continue;
+        }
+        let line = edit_line(&file.rows, self.views[self.file].row);
+        Action::Edit(self.snapshot.root.join(&file.path), line)
+    }
+
+    /// Replace the snapshot after external edits. Comments keep their original
+    /// anchors; views follow their files by path and their rows by new-side line.
+    pub fn reload(&mut self, snapshot: Snapshot) {
+        let current = self.snapshot.files.get(self.file).map(|f| f.path.clone());
+        let mut old: HashMap<_, _> = self
+            .snapshot
+            .files
+            .iter()
+            .zip(&self.views)
+            .map(|(f, v)| (f.path.clone(), (edit_line(&f.rows, v.row), v.left)))
+            .collect();
+        self.views = snapshot
+            .files
+            .iter()
+            .map(|f| {
+                let Some((line, left)) = old.remove(&f.path) else {
+                    return View::default();
+                };
+                let row = f
+                    .rows
+                    .iter()
+                    .position(|r| r.new.is_some_and(|n| n >= line))
+                    .unwrap_or(f.rows.len().saturating_sub(1));
+                View {
+                    row,
+                    left,
+                    center: true,
+                    ..View::default()
+                }
+            })
+            .collect();
+        self.file = current
+            .and_then(|p| snapshot.files.iter().position(|f| f.path == p))
+            .unwrap_or(self.file)
+            .min(snapshot.files.len().saturating_sub(1));
+        self.snapshot = snapshot;
+        self.selection = None;
+        self.mode = Mode::Normal;
+        self.search();
+    }
+
+    fn search(&mut self) {
+        self.matches.clear();
+        if self.query.is_empty() {
+            return;
+        }
+        let q = self.query.to_lowercase();
+        for (f, file) in self.snapshot.files.iter().enumerate() {
+            for (r, row) in file.rows.iter().enumerate() {
+                if row.text.to_lowercase().contains(&q) {
+                    self.matches.push((f, r));
+                }
+            }
+        }
     }
 
     fn change_file(&mut self, file: usize) {
@@ -545,6 +605,26 @@ impl App {
             self.summary = false;
         }
     }
+}
+
+/// Working-tree line for a diff row: its new-side line, else the next one in
+/// the same hunk (where deleted lines were), else the previous one, else 1.
+fn edit_line(rows: &[crate::diff::Row], row: usize) -> usize {
+    let row = row.min(rows.len().saturating_sub(1));
+    rows.get(row..)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .take_while(|(i, r)| *i == 0 || r.kind != Kind::Hunk)
+        .find_map(|(_, r)| r.new)
+        .or_else(|| {
+            rows.get(..row)
+                .unwrap_or_default()
+                .iter()
+                .rev()
+                .find_map(|r| r.new)
+        })
+        .unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -829,8 +909,72 @@ mod tests {
             target: None,
             files: vec![],
         });
-        for c in "123GjkgG{}[]vcprCSsdi/nN".chars() {
+        for c in "123GjkgG{}[]vcprCSsdei/nN".chars() {
             press(&mut a, c);
         }
+    }
+
+    #[test]
+    fn e_opens_the_working_tree_line_for_the_current_row() {
+        let mut a = app();
+        a.snapshot.files[0].rows =
+            crate::diff::parse_patch("@@ -1,3 +1,2 @@\n one\n-gone\n two\n@@ -9 +8,0 @@\n-tail\n")
+                .unwrap();
+        // Rows: hunk, one(1), gone(old), two(2), hunk, tail(old).
+        for (row, line) in [(0, 1), (1, 1), (2, 2), (3, 2), (4, 2), (5, 2)] {
+            a.views[0].row = row;
+            assert_eq!(
+                press(&mut a, 'e'),
+                Action::Edit("/repo/a.rs".into(), line),
+                "row {row}"
+            );
+        }
+        a.files_focused = true;
+        assert!(matches!(press(&mut a, 'e'), Action::Edit(..)));
+        a.files_focused = false;
+        a.summary = true;
+        assert_eq!(press(&mut a, 'e'), Action::Continue);
+        a.summary = false;
+        a.snapshot.files[0].status = 'D';
+        assert_eq!(press(&mut a, 'e'), Action::Continue);
+        assert!(a.message.contains("was deleted"));
+    }
+
+    #[test]
+    fn reload_keeps_comments_file_and_line_and_refreshes_search() {
+        let file = |path: &str, patch: &str| crate::diff::FileDiff {
+            path: path.into(),
+            status: 'M',
+            patch: patch.into(),
+            rows: crate::diff::parse_patch(patch).unwrap(),
+        };
+        let mut a = app();
+        a.snapshot
+            .files
+            .push(file("b.rs", "@@ -1,2 +1,2 @@\n x\n-y\n+z\n"));
+        a.views.push(View::default());
+        a.change_file(1);
+        a.views[1].row = 3;
+        a.views[1].left = 8;
+        a.selection = Some(1);
+        a.comments.push(Comment {
+            anchor: Anchor::lines(&a.snapshot.files[1], 3, 3).unwrap(),
+            body: "keep".into(),
+        });
+        a.query = "z".into();
+        let mut snapshot = a.snapshot.clone();
+        snapshot.files.remove(0);
+        snapshot.files.push(file("c.rs", "@@ -0,0 +1 @@\n+z\n"));
+        snapshot.files[0] = file("b.rs", "@@ -1,2 +1,3 @@\n x\n+w\n-y\n+z\n");
+        a.reload(snapshot);
+        assert_eq!(a.file, 0);
+        assert_eq!(a.snapshot.files[0].rows[a.views[0].row].new, Some(2));
+        assert_eq!(a.views[0].left, 8);
+        assert!(a.views[0].center);
+        assert_eq!(a.views[1].row, 0);
+        assert!(a.selection.is_none());
+        assert_eq!(a.comments[0].body, "keep");
+        assert_eq!(a.comments[0].anchor.start, Some(2));
+        assert_eq!(a.matches, vec![(0, 4), (1, 1)]);
     }
 }

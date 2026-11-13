@@ -97,6 +97,7 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | `c`                 | Line comment; on metadata, file comment         |
 | `v`, move, `c`      | Range comment within one hunk and one side      |
 | `C` / `a`           | File / general comment                          |
+| `e`                 | Open the current line in `nvim`                 |
 | `r`                 | Comment summary; `Enter` jumps to the anchor    |
 | `i` / `d`           | Edit / delete selected comment                  |
 | `S`                 | Send all comments and close                     |
@@ -120,6 +121,11 @@ still move by source row. Paging moves by screen rows, so even a single line
 taller than the viewport can be read in full. `h/l` and left/right scrolling are
 disabled while wrapping; toggling back restores each file's horizontal position.
 The diff title shows `wrap` or `nowrap`. Comment editors and summaries always wrap.
+
+Press `e` to open the current file in `nvim` at the current line. Deleted lines
+open at the line that follows them. revisar hands the terminal to `nvim` and
+reloads the diff when it exits; comments keep their original anchors, and the
+send-time check compares against the reloaded diff. Deleted files cannot be opened.
 
 The comment editor is a small modal Vim editor. Comments (and `i` edits) open in
 Insert mode. The status line shows `-- INSERT --`

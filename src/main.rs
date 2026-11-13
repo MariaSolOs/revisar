@@ -19,6 +19,8 @@ use revisar::{
 use std::{
     fs::{File, OpenOptions},
     io::{self, Write},
+    path::Path,
+    process::{Command, ExitStatus},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -75,13 +77,28 @@ impl Screen {
     }
 }
 
+/// Run nvim on the controlling terminal; stdout stays reserved for feedback.
+fn open_nvim(root: &Path, path: &Path, line: usize) -> Result<ExitStatus> {
+    let tty = || OpenOptions::new().read(true).write(true).open("/dev/tty");
+    Command::new("nvim")
+        .current_dir(root)
+        .arg(format!("+{line}"))
+        .arg("--")
+        .arg(path)
+        .stdin(tty()?)
+        .stdout(tty()?)
+        .stderr(tty()?)
+        .status()
+        .context("Could not run nvim")
+}
+
 fn run() -> Result<u8> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [] => (),
         [arg] if arg == "--help" || arg == "-h" => {
             println!(
-                "revisar - review agentic working-tree changes\n\nUsage: revisar [--help | --version]\n\nRun inside a Git working tree. Reviews net staged + unstaged + untracked\nchanges against HEAD, or against the merge base with origin/HEAD, main, or\nmaster when the branch has diverged from it. UI uses /dev/tty; explicit Send writes Markdown to\nstdout. Nothing is saved. q cancels without output.\n\nKeys: c comment, v range, C file, a general, r summary, S Send, ? help.\n\nExit codes: 0 sent, 1 error, 2 cancelled (no feedback).\nBuild: cargo build --release --locked"
+                "revisar - review agentic working-tree changes\n\nUsage: revisar [--help | --version]\n\nRun inside a Git working tree. Reviews net staged + unstaged + untracked\nchanges against HEAD, or against the merge base with origin/HEAD, main, or\nmaster when the branch has diverged from it. UI uses /dev/tty; explicit Send writes Markdown to\nstdout. Nothing is saved. q cancels without output.\n\nKeys: c comment, v range, C file, a general, e open in nvim, r summary, S Send, ? help.\n\nExit codes: 0 sent, 1 error, 2 cancelled (no feedback).\nBuild: cargo build --release --locked"
             );
             return Ok(0);
         }
@@ -144,6 +161,25 @@ fn run() -> Result<u8> {
                 }
             }
             Action::SendStale => break true,
+            Action::Edit(path, line) => {
+                // Hand the terminal to nvim, then rebuild it from scratch.
+                drop(screen);
+                let status = open_nvim(&app.snapshot.root, &path, line);
+                screen = Screen::open()?;
+                block_cursor = false;
+                match Snapshot::load(&app.snapshot.root) {
+                    Ok(snapshot) => {
+                        app.reload(snapshot);
+                        app.message = "Reloaded the diff after nvim".into();
+                    }
+                    Err(e) => app.message = format!("Could not reload the diff: {e:#}"),
+                }
+                match status {
+                    Ok(status) if status.success() => (),
+                    Ok(status) => app.message = format!("nvim exited with {status}"),
+                    Err(e) => app.message = format!("{e:#}"),
+                }
+            }
         }
     };
     drop(screen);

@@ -13,14 +13,26 @@ import termios
 import time
 
 binary, repo = sys.argv[1:]
+target = Path(__file__).resolve().parent.parent / "target"
+fake_bin = Path(tempfile.mkdtemp(dir=target))
+nvim_log = fake_bin / "nvim.log"
+# Stand-in nvim: records its arguments, writes to the terminal, edits the file.
+Path(fake_bin, "nvim").write_text(
+    "#!/bin/sh\n"
+    f"printf '%s\\n' \"$PWD\" \"$@\" > '{nvim_log}'\n"
+    "echo FAKE-NVIM-RAN\n"
+    "printf 'edited\\n' > \"$3\"\n"
+)
+os.chmod(fake_bin / "nvim", 0o755)
 
 
 def run(mode):
-    with tempfile.TemporaryFile(dir=Path(__file__).resolve().parent.parent / "target") as feedback:
+    with tempfile.TemporaryFile(dir=target) as feedback:
         pid, fd = pty.fork()
         if pid == 0:
             os.chdir(repo)
             os.environ["TERM"] = "xterm-256color"
+            os.environ["PATH"] = f"{fake_bin}:{os.environ['PATH']}"
             os.dup2(feedback.fileno(), 1)
             os.execv(binary, [binary])
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
@@ -38,6 +50,14 @@ def run(mode):
             if mode == "signal":
                 os.kill(pid, signal.SIGTERM)
             else:
+                if mode == "edit":
+                    # The deleted "before" row opens at the line that replaced it.
+                    os.write(fd, b"je")
+                    read_until(b"Reloaded the diff after nvim")
+                    assert b"FAKE-NVIM-RAN" in screen
+                    root = Path(repo).resolve()
+                    assert nvim_log.read_text() == f"{root}\n+1\n--\n{root / 'a.rs'}\n"
+                    assert Path(repo, "a.rs").read_text() == "edited\n"
                 os.write(fd, b"jc")
                 read_until(b"Comment:")
                 # Insert mode: Enter is a newline; Ctrl-s keeps the comment.
@@ -74,7 +94,12 @@ def run(mode):
                 assert text == b"", text
             else:
                 assert b"Please handle\n this case." in text, text
-                assert b'(old side, base)' in text, text
+                if mode == "edit":
+                    assert b"FAKE-NVIM-RAN" not in text, text
+                    assert b"Reviewed code:\n```\nedited\n```" in text, text
+                    assert b"(new side, working tree)" in text, text
+                else:
+                    assert b'(old side, base)' in text, text
                 assert b"\x1b" not in text, text
                 assert (b"WARNING:" in text) == (mode == "stale"), text
             if mode == "send":
@@ -92,6 +117,8 @@ def run(mode):
             os.close(fd)
 
 
-for mode in ("send", "cancel", "signal", "stale"):
+for mode in ("send", "edit", "cancel", "signal", "stale"):
     run(mode)
+    if mode == "edit":
+        Path(repo, "a.rs").write_text("after\n")
     print(f"PTY {mode}: passed")
