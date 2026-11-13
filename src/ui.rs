@@ -22,6 +22,8 @@ pub struct Ui {
     wrapped: Option<WrappedDiff>,
     files: ListState,
     comments: ListState,
+    // App::revision the caches above were built from.
+    revision: usize,
 }
 
 struct WrappedDiff {
@@ -51,6 +53,11 @@ fn block(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
 
 impl Ui {
     pub fn draw(&mut self, frame: &mut Frame, app: &mut App) {
+        if self.revision != app.revision {
+            self.revision = app.revision;
+            self.highlighted.clear();
+            self.wrapped = None;
+        }
         let area = frame.area();
         frame.render_widget(Block::default().style(t::base()), area);
         if area.width < 45 || area.height < 12 {
@@ -724,6 +731,36 @@ mod tests {
             .map(|line| line.iter().map(|s| s.content.as_ref()).collect())
             .collect();
         assert_eq!(text, ["one ", "e\u{301}界 end"]);
+    }
+
+    #[test]
+    fn reload_drops_render_caches_built_for_the_old_snapshot() {
+        let mut app = wrapping_app("short");
+        let mut ui = Ui::default();
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| ui.draw(f, &mut app)).unwrap();
+        let short = app.snapshot.clone();
+        let mut snapshot = short.clone();
+        snapshot.files[0].rows =
+            parse_patch("@@ -0,0 +1,4 @@\n+short\n+next\n+more\n+lines\n").unwrap();
+        app.reload(snapshot);
+        for wrap in [true, false] {
+            app.wrap = wrap;
+            app.views[0].row = 4;
+            terminal.draw(|f| ui.draw(f, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let text: String = (0..buffer.area.height)
+                .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+                .map(|p| buffer[p].symbol())
+                .collect();
+            assert!(text.contains("lines"), "{text}");
+        }
+        // Fewer rows than the cached highlighting used to index out of bounds.
+        app.reload(short);
+        for wrap in [true, false] {
+            app.wrap = wrap;
+            terminal.draw(|f| ui.draw(f, &mut app)).unwrap();
+        }
     }
 
     #[test]

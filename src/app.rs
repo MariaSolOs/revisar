@@ -67,6 +67,8 @@ pub struct App {
     pub matches: Vec<(usize, usize)>,
     pub message: String,
     pub height: usize,
+    // Bumped whenever the snapshot is replaced, so render caches can be dropped.
+    pub revision: usize,
     line_prefix: Option<usize>,
 }
 
@@ -89,6 +91,7 @@ impl App {
             matches: vec![],
             message: String::new(),
             height: 20,
+            revision: 0,
             line_prefix: None,
         }
     }
@@ -408,6 +411,7 @@ impl App {
             .unwrap_or(self.file)
             .min(snapshot.files.len().saturating_sub(1));
         self.snapshot = snapshot;
+        self.revision += 1;
         self.selection = None;
         self.mode = Mode::Normal;
         self.search();
