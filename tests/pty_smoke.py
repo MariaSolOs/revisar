@@ -38,15 +38,10 @@ def run(mode):
             if mode == "signal":
                 os.kill(pid, signal.SIGTERM)
             else:
-                os.write(fd, b"js" if mode == "suggestion" else b"jc")
+                os.write(fd, b"jc")
                 read_until(b"Comment:")
-                if mode == "suggestion":
-                    read_until(b"```suggestion")
-                    # Normal mode on "before": delete it, open a line, paste.
-                    os.write(fd, b"ddO\x1b[200~suggested replacement\x1b[201~\x13")  # Ctrl-s
-                else:
-                    # Insert mode: Enter is a newline; Ctrl-s keeps the comment.
-                    os.write(fd, b"\x1b[200~Please handle\x1b[201~\r this case.\x13")
+                # Insert mode: Enter is a newline; Ctrl-s keeps the comment.
+                os.write(fd, b"\x1b[200~Please handle\x1b[201~\r this case.\x13")
                 read_until(b"Comment added")
                 if mode == "stale":
                     Path(repo, "a.rs").write_text("changed during review\n")
@@ -78,12 +73,7 @@ def run(mode):
             if mode in ("cancel", "signal"):
                 assert text == b"", text
             else:
-                if mode == "suggestion":
-                    assert b"```suggestion\nsuggested replacement\n```" in text, text
-                    assert b"Reviewed code:\n```\nbefore\n```" in text, text
-                    assert Path(repo, "a.rs").read_text() == "after\n"
-                else:
-                    assert b"Please handle\n this case." in text, text
+                assert b"Please handle\n this case." in text, text
                 assert b'(old side, base)' in text, text
                 assert b"\x1b" not in text, text
                 assert (b"WARNING:" in text) == (mode == "stale"), text
@@ -102,6 +92,6 @@ def run(mode):
             os.close(fd)
 
 
-for mode in ("send", "suggestion", "cancel", "signal", "stale"):
+for mode in ("send", "cancel", "signal", "stale"):
     run(mode)
     print(f"PTY {mode}: passed")

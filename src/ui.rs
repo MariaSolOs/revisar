@@ -97,9 +97,9 @@ impl Ui {
         let hints = if app.summary {
             " r/Esc diff  j/k comments  Enter jump  i edit  d delete  Ctrl-d/u scroll  S Send"
         } else if app.selection.is_some() {
-            " RANGE  j/k extend  c comment  s suggest  w wrap  Esc cancel"
+            " RANGE  j/k extend  c comment  w wrap  Esc cancel"
         } else {
-            " j/k move  w wrap  Tab files  c comment  s suggest  v range  r summary  S Send  q cancel  ? help"
+            " j/k move  w wrap  Tab files  c comment  v range  r summary  S Send  q cancel  ? help"
         };
         frame.render_widget(
             Paragraph::new(vec![
@@ -639,7 +639,7 @@ fn comment_hint(editor: &Editor) -> &'static str {
     }
 }
 const HELP_TITLE: &str = " Help - j/k scroll, ?/Esc close ";
-const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk at viewport top\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n s                 Suggest replacement for line / range\n C / a             File / general comment\n r                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Esc               Cancel selection / search\n\nCOMMENT EDITOR (VIM)\n                   Comments open in Insert, suggestions in Normal\n Ctrl-s            Keep comment in memory (any mode)\n Enter             Insert: newline; Normal: keep comment\n Esc               Insert: Normal mode; Normal: discard edit\n h/j/k/l w/b 0/$   Move; d/c + motion deletes / changes\n i/a o/O           Insert before/after; open line below/above\n x / u / dd / cc   Delete char / undo / delete, change line\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
+const HELP: &str = "NAVIGATE\n j/k or arrows    Move through lines / files / comments\n h/l               Horizontal diff scroll (nowrap only)\n w                 Toggle diff wrap / nowrap\n Ctrl-d/u          Half-page + center (summary: scroll body)\n g/G               First/last row\n <number>G         Center source line (new side, then old)\n                   Missing from diff: stay put; Esc cancels number\n Tab               Focus files or diff\n {/}               Previous/next file\n [/]               Previous/next hunk at viewport top\n / then n/N        Search all diffs; center next/prev match\n\nCOMMENT\n c                 Line comment (metadata: file comment)\n v then j/k, c     Range comment (one side, one hunk)\n C / a             File / general comment\n r                 Comment summary; Enter jumps to code\n i / d             Edit / delete selected comment\n Esc               Cancel selection / search\n\nCOMMENT EDITOR (VIM)\n                   Comments open in Insert mode\n Ctrl-s            Keep comment in memory (any mode)\n Enter             Insert: newline; Normal: keep comment\n Esc               Insert: Normal mode; Normal: discard edit\n h/j/k/l w/b 0/$   Move; d/c + motion deletes / changes\n i/a o/O           Insert before/after; open line below/above\n x / u / dd / cc   Delete char / undo / delete, change line\n\nFINISH\n S                 Send all comments and close\n q                 Cancel; confirm discarding comments\n\n? / Esc / q closes help.";
 
 #[cfg(test)]
 mod tests {

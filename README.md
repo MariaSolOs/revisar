@@ -78,7 +78,6 @@ then exits successfully so cancellation is not treated as a terminal failure.
   is embedded from `assets/miss-dracula-syntax.tmTheme`; no runtime config files.
 - Line, range, file, and general comments. Comments include source coordinates,
   old/new side, base commit, and the selected code excerpt in the agent's feedback.
-- Suggested replacements: copy a line or range into an editable suggestion block.
 - Diff search, hunk navigation, and comment summary.
 - Before Send, revisar checks the snapshot again. Changed files require
   confirmation and add a warning that the original line numbers may be stale.
@@ -97,7 +96,6 @@ then exits successfully so cancellation is not treated as a terminal failure.
 | `/`, then `n` / `N` | Search all diffs; next / previous matching line |
 | `c`                 | Line comment; on metadata, file comment         |
 | `v`, move, `c`      | Range comment within one hunk and one side      |
-| `s`                 | Suggest replacement for current line / range    |
 | `C` / `a`           | File / general comment                          |
 | `r`                 | Comment summary; `Enter` jumps to the anchor    |
 | `i` / `d`           | Edit / delete selected comment                  |
@@ -123,17 +121,8 @@ taller than the viewport can be read in full. `h/l` and left/right scrolling are
 disabled while wrapping; toggling back restores each file's horizontal position.
 The diff title shows `wrap` or `nowrap`. Comment editors and summaries always wrap.
 
-Press `s` on a source line, or select a range with `v` and movement then press
-`s`, to open a comment prefilled with the selected code in a `suggestion` block.
-The editor opens in Vim Normal mode with the cursor on the first code character. Edit the block to show your
-replacement; you can add an explanation outside it. Ranges must stay within one
-hunk and one side, just like comments. Suggestions on deleted lines refer to the
-old base code. The original excerpt and coordinates remain attached, and `i`
-reopens the full suggestion for editing. `S` sends it to the agent as review
-feedback; revisar never applies the replacement or changes files itself.
-
 The comment editor is a small modal Vim editor. Comments (and `i` edits) open in
-Insert mode; suggestions open in Normal mode. The status line shows `-- INSERT --`
+Insert mode. The status line shows `-- INSERT --`
 or `-- NORMAL --`, and the terminal caret is a block in Normal mode.
 
 - `Ctrl-s` keeps the comment **in memory** from either mode; `Ctrl-c` discards.

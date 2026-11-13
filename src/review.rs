@@ -65,11 +65,6 @@ impl Anchor {
         })
     }
 
-    pub fn suggestion(&self) -> String {
-        let fence = code_fence(&self.excerpt);
-        format!("{fence}suggestion\n{}\n{fence}", self.excerpt)
-    }
-
     pub fn heading(&self) -> String {
         let Some(path) = &self.path else {
             return "General review comment".into();
@@ -176,22 +171,11 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_preserve_source_and_use_safe_markdown_fences() {
+    fn code_fences_are_safe_for_excerpts() {
         for excerpt in ["", "\t界  ", "```rust\ncode\n```", "`````"] {
-            let anchor = Anchor {
-                excerpt: excerpt.into(),
-                ..Anchor::general()
-            };
-            let suggestion = anchor.suggestion();
-            let fence = suggestion
-                .lines()
-                .next()
-                .unwrap()
-                .strip_suffix("suggestion")
-                .unwrap();
+            let fence = code_fence(excerpt);
             assert!(fence.len() >= 3);
-            assert!(!excerpt.contains(fence));
-            assert_eq!(suggestion, format!("{fence}suggestion\n{excerpt}\n{fence}"));
+            assert!(!excerpt.contains(&fence));
         }
     }
 
