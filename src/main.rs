@@ -145,7 +145,17 @@ fn run() -> Result<u8> {
         if !event::poll(Duration::from_millis(100))? {
             continue;
         }
-        match app.event(event::read()?) {
+        // Drain queued input before redrawing. Mouse wheels arrive as bursts of
+        // arrow keys (alternate scroll); one draw per key builds a backlog that
+        // keeps scrolling after the wheel stops.
+        let mut action = app.event(event::read()?);
+        while matches!(action, Action::Continue)
+            && !terminated.load(Ordering::Relaxed)
+            && event::poll(Duration::ZERO)?
+        {
+            action = app.event(event::read()?);
+        }
+        match action {
             Action::Continue => (),
             Action::Cancel => return Ok(2),
             Action::Send => {
